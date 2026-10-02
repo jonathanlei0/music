@@ -1,0 +1,6 @@
+numpy==2.5.2
+pyserial==3.5
+sounddevice==0.5.6
+scipy==1.18.1
+soundfile==0.14.0
+matplotlib==3.11.1

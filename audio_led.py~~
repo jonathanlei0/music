@@ -1,0 +1,640 @@
+import select
+import sys
+import termios
+import threading
+import time
+import tty
+from collections import deque
+
+import numpy as np
+import sounddevice as sd
+import serial
+import serial.tools.list_ports
+
+# -----------------------------
+# SETTINGS
+# -----------------------------
+
+BAUD = 115200
+SAMPLE_RATE = 48000
+
+# Smaller blocks than a plain level meter would need, because
+# beat detection lives or dies on timing resolution.
+BLOCK_SIZE = 1024
+
+AUDIO_DEVICE_NAME = "BlackHole"
+AUDIO_DEVICE_FALLBACK = 0
+
+# BlackHole must be the macOS system output when pass-through is enabled.
+# Python analyzes that undelayed signal, then plays it through this device
+# after AUDIO_DELAY_MS so the sound lands with the LED animation.
+AUDIO_OUTPUT_DEVICE_NAME = "AirPods Pro"
+AUDIO_DELAY_MS = 10.0
+
+# Frames per second pushed to the Arduino. The Arduino animates
+# at its own rate in between, so this only has to be fast enough
+# to keep beats feeling immediate.
+SEND_RATE = 50
+
+MODE_REACTIVE = 0
+MODE_AMBIENT = 1
+
+# Below this, the strip goes fully dark.
+SILENCE_DB = -48.0
+
+# How far below a track's own loudest moments still counts as
+# visible. Everything is measured against a reference that
+# follows the music, so a quietly mastered album lights up the
+# room just as much as a loud one.
+DYNAMIC_RANGE_DB = 26.0
+REFERENCE_RISE = 0.30
+REFERENCE_FALL_DB = 0.01
+REFERENCE_FLOOR_DB = -34.0
+
+# Frequency bands, in Hz. Sub-bass gets its own channel so kicks can drive
+# their section independently from bass notes and low instruments.
+SUB_BASS_BAND = (30, 80)
+BASS_BAND = (80, 180)
+MID_BAND = (180, 2000)
+HIGH_BAND = (2000, 10000)
+
+# Fixed bass calibration. Unlike RollingPeak, this never changes with the
+# track: an FFT band-energy value of 35 or more is full scale every time.
+BASS_FULL_SCALE = 35.0
+
+# Range searched for the melody, and the arc of the colour wheel
+# it maps onto. Hue 0 is red and 45000 is a deep blue, so darker
+# moments come out warm and brighter ones come out cool. The arc
+# is spanned relative to the range a track actually covers, not
+# to MELODY_LOW and MELODY_HIGH, which only bound the search.
+MELODY_LOW = 220
+MELODY_HIGH = 4000
+HUE_WARM = 0
+HUE_COOL = 45000
+
+COLOR_SMOOTHING = 0.10
+COLOR_REST_HZ = 700.0
+
+# A beat fires when bass energy jumps above its recent average.
+BEAT_HISTORY = 64
+BEAT_SENSITIVITY = 1.35
+BEAT_FLOOR = 0.12
+BEAT_REFRACTORY = 0.16
+
+# -----------------------------
+# STATE
+# -----------------------------
+
+state = {
+    "mode": MODE_REACTIVE,
+    "level": 0,
+    "sub_bass": 0,
+    "bass": 0,
+    "mid": 0,
+    "high": 0,
+    "hue": 0,
+    "beat": False,
+    "db": -99.0,
+    "tone": COLOR_REST_HZ,
+}
+
+state_lock = threading.Lock()
+running = threading.Event()
+running.set()
+
+reference_db = -18.0
+frequency_smoothed = COLOR_REST_HZ
+bass_history = deque(maxlen=BEAT_HISTORY)
+last_beat_time = 0.0
+
+
+class RollingPeak:
+    """Tracks a decaying maximum.
+
+    Each band is measured against how strong it has recently
+    been rather than against a fixed number, so quiet recordings
+    and dense loud ones both use the whole brightness range.
+    """
+
+    def __init__(self, initial, rise=0.25, fall=0.998, floor=1e-5):
+        self.value = initial
+        self.rise = rise
+        self.fall = fall
+        self.floor = floor
+
+    def normalize(self, x):
+        if x > self.value:
+            self.value += (x - self.value) * self.rise
+        else:
+            self.value *= self.fall
+
+        self.value = max(self.value, self.floor)
+
+        return min(x / self.value, 1.0)
+
+
+class AdaptiveRange:
+    """Stretches whatever range a signal actually occupies across 0 to 1.
+
+    The spectral centroid of real music only ever wanders across
+    a narrow band in the low mids, so measuring it against fixed
+    endpoints pins the colour to one part of the wheel. Following
+    the range the current track actually uses puts the whole
+    wheel back in play.
+    """
+
+    def __init__(self, low, high, expand=0.25, contract=0.0008, min_span=1.3):
+        self.low = low
+        self.high = high
+        self.expand = expand
+        self.contract = contract
+        self.min_span = min_span
+
+    def normalize(self, x):
+        if x < self.low:
+            self.low += (x - self.low) * self.expand
+
+        if x > self.high:
+            self.high += (x - self.high) * self.expand
+
+        # Creep back inward, so one outlier does not flatten the
+        # colour for the rest of the session.
+        span = self.high - self.low
+        self.low += span * self.contract
+        self.high -= span * self.contract
+
+        span = self.high - self.low
+
+        if span < self.min_span:
+            centre = (self.high + self.low) * 0.5
+
+            self.low = centre - self.min_span * 0.5
+            self.high = centre + self.min_span * 0.5
+            span = self.min_span
+
+        return float(np.clip((x - self.low) / span, 0.0, 1.0))
+
+
+sub_bass_peak = RollingPeak(0.01)
+mid_peak = RollingPeak(0.01)
+high_peak = RollingPeak(0.01)
+
+# Held in log2 Hz, so the span is measured in octaves.
+pitch_range = AdaptiveRange(np.log2(500.0), np.log2(1600.0))
+
+# -----------------------------
+# AUDIO DEVICE
+# -----------------------------
+
+
+def find_audio_device():
+    for index, device in enumerate(sd.query_devices()):
+        if device["max_input_channels"] < 1:
+            continue
+
+        if AUDIO_DEVICE_NAME.lower() in device["name"].lower():
+            return index
+
+    return AUDIO_DEVICE_FALLBACK
+
+
+def find_audio_output_device():
+    for index, device in enumerate(sd.query_devices()):
+        if device["max_output_channels"] < 2:
+            continue
+
+        if AUDIO_OUTPUT_DEVICE_NAME.lower() in device["name"].lower():
+            return index
+
+    available = [
+        device["name"]
+        for device in sd.query_devices()
+        if device["max_output_channels"] >= 2
+    ]
+    choices = "\n  ".join(available)
+    raise RuntimeError(
+        f"Audio output containing {AUDIO_OUTPUT_DEVICE_NAME!r} was not found.\n"
+        f"Available stereo outputs:\n  {choices}"
+    )
+
+
+def require_blackhole_system_output():
+    """Avoid mixing the direct system feed with our delayed copy."""
+    default_output = sd.default.device[1]
+
+    if default_output is None or default_output < 0:
+        raise RuntimeError("macOS has no default audio output")
+
+    name = sd.query_devices(default_output)["name"]
+
+    if AUDIO_DEVICE_NAME.lower() not in name.lower():
+        raise RuntimeError(
+            "Set System Settings -> Sound -> Output to 'BlackHole 2ch' "
+            "before starting.\n"
+            f"The current system output is {name!r}; leaving it selected would "
+            "play both the direct and delayed audio."
+        )
+
+
+class AudioDelayLine:
+    """Fixed sample-accurate delay without blocking the audio callback."""
+
+    def __init__(self, delay_ms, channels=2):
+        self.channels = channels
+        self.delay_frames = max(0, round(SAMPLE_RATE * delay_ms / 1000.0))
+        self.blocks = deque()
+        self.head_offset = 0
+
+        if self.delay_frames:
+            self.blocks.append(
+                np.zeros((self.delay_frames, channels), dtype=np.float32)
+            )
+
+    def process(self, indata, outdata):
+        if self.delay_frames == 0:
+            outdata[:] = indata
+            return
+
+        # PortAudio reuses its input buffer, so queued samples need a copy.
+        self.blocks.append(indata.copy())
+        written = 0
+
+        while written < len(outdata):
+            block = self.blocks[0]
+            available = len(block) - self.head_offset
+            count = min(available, len(outdata) - written)
+
+            outdata[written:written + count] = block[
+                self.head_offset:self.head_offset + count
+            ]
+
+            written += count
+            self.head_offset += count
+
+            if self.head_offset == len(block):
+                self.blocks.popleft()
+                self.head_offset = 0
+
+
+# -----------------------------
+# ARDUINO
+# -----------------------------
+
+
+def find_arduino_port():
+    for port in serial.tools.list_ports.comports():
+        description = (port.description or "").lower()
+        device = port.device.lower()
+
+        if "arduino" in description or "usbmodem" in device:
+            return port.device
+
+    return None
+
+
+# -----------------------------
+# ANALYSIS
+# -----------------------------
+
+
+def band_energy(spectrum, frequencies, band):
+    mask = (frequencies >= band[0]) & (frequencies <= band[1])
+
+    if not np.any(mask):
+        return 0.0
+
+    return float(np.mean(spectrum[mask]))
+
+
+def detect_beat(bass_energy, now):
+    global last_beat_time
+
+    bass_history.append(bass_energy)
+
+    if len(bass_history) < BEAT_HISTORY // 2:
+        return False
+
+    average = float(np.mean(bass_history))
+
+    if bass_energy < BEAT_FLOOR:
+        return False
+
+    if bass_energy < average * BEAT_SENSITIVITY:
+        return False
+
+    if now - last_beat_time < BEAT_REFRACTORY:
+        return False
+
+    last_beat_time = now
+
+    return True
+
+
+def audio_callback(indata, frames, time_info, status):
+    global reference_db
+    global frequency_smoothed
+
+    if status:
+        print(status, file=sys.stderr)
+
+    audio = np.mean(indata, axis=1)
+    audio = audio - np.mean(audio)
+
+    # =====================================================
+    # LOUDNESS -> OVERALL LEVEL
+    # =====================================================
+
+    rms = max(float(np.sqrt(np.mean(audio**2))), 1e-9)
+    db = 20.0 * np.log10(rms)
+
+    if db > reference_db:
+        reference_db += (db - reference_db) * REFERENCE_RISE
+    else:
+        reference_db -= REFERENCE_FALL_DB
+
+    reference_db = max(reference_db, REFERENCE_FLOOR_DB)
+
+    quiet_db = reference_db - DYNAMIC_RANGE_DB
+
+    if db <= SILENCE_DB or db <= quiet_db:
+        level = 0.0
+    else:
+        level = (db - quiet_db) / (reference_db - quiet_db)
+        level = float(np.clip(level, 0.0, 1.0))
+
+        # Lifts the middle of the range, where most music sits.
+        level = level**0.7
+
+    # =====================================================
+    # SPECTRUM -> BANDS, COLOUR, BEATS
+    # =====================================================
+
+    window = np.hanning(len(audio))
+    spectrum = np.abs(np.fft.rfft(audio * window))
+    frequencies = np.fft.rfftfreq(len(audio), 1.0 / SAMPLE_RATE)
+
+    sub_bass = sub_bass_peak.normalize(
+        band_energy(spectrum, frequencies, SUB_BASS_BAND)
+    )
+    raw_bass = band_energy(spectrum, frequencies, BASS_BAND)
+    bass = float(np.clip(raw_bass / BASS_FULL_SCALE, 0.0, 1.0))
+
+    # Fixed perceptual curve: it makes moderate bass visible but, unlike the
+    # old rolling peak, never adapts based on what played recently.
+    bass = bass**0.5
+    mid = mid_peak.normalize(band_energy(spectrum, frequencies, MID_BAND))
+    high = high_peak.normalize(band_energy(spectrum, frequencies, HIGH_BAND))
+
+    kick_energy = max(sub_bass, bass * 0.75)
+    beat = detect_beat(kick_energy, time.monotonic()) if level > 0.05 else False
+
+    if level > 0.03:
+        # Spectral centroid rather than the single loudest bin.
+        # The loudest bin hops between neighbouring notes and
+        # makes the colour twitch; the energy-weighted average
+        # glides, and tracks how bright the sound is overall.
+        melody_mask = ((frequencies >= MELODY_LOW)
+                       & (frequencies <= MELODY_HIGH))
+
+        melody_spectrum = spectrum[melody_mask]
+        melody_freqs = frequencies[melody_mask]
+
+        total = float(np.sum(melody_spectrum))
+
+        if total > 1e-9:
+            centroid = float(np.sum(melody_freqs * melody_spectrum) / total)
+        else:
+            centroid = COLOR_REST_HZ
+    else:
+        # Drift home during silence so the next track does not
+        # start from whatever note the last one ended on.
+        centroid = COLOR_REST_HZ
+
+    centroid = float(np.clip(centroid, MELODY_LOW, MELODY_HIGH))
+
+    # Smoothed in log space so an octave move feels the same
+    # size whether it happens high or low.
+    old_log = np.log2(max(frequency_smoothed, MELODY_LOW))
+    new_log = np.log2(centroid)
+
+    frequency_smoothed = 2**(old_log + (new_log - old_log) * COLOR_SMOOTHING)
+
+    pitch_position = pitch_range.normalize(np.log2(frequency_smoothed))
+
+    hue = int(HUE_WARM + pitch_position * (HUE_COOL - HUE_WARM))
+
+    # =====================================================
+    # PUBLISH
+    # =====================================================
+
+    with state_lock:
+        state["level"] = int(level * 255)
+        state["sub_bass"] = int(sub_bass * 255)
+        state["bass"] = int(bass * 255)
+        state["mid"] = int(mid * 255)
+        state["high"] = int(high * 255)
+        state["hue"] = hue
+        state["db"] = db
+        state["tone"] = frequency_smoothed
+
+        # Left set until the sender picks it up, so a beat
+        # landing between sends is never dropped.
+        if beat:
+            state["beat"] = True
+
+
+def make_audio_io_callback(delay_line):
+    """Analyze the live block, then send a delayed copy to the listener."""
+
+    def audio_io_callback(indata, outdata, frames, time_info, status):
+        audio_callback(indata, frames, time_info, status)
+        delay_line.process(indata, outdata)
+
+    return audio_io_callback
+
+
+# -----------------------------
+# SENDER
+# -----------------------------
+
+
+def hue_name(hue):
+    names = ((3000, "red"), (8000, "orange"), (14000, "yellow"),
+             (25000, "green"), (36000, "cyan"), (48000, "blue"))
+
+    for limit, name in names:
+        if hue < limit:
+            return name
+
+    return "magenta"
+
+
+def sender_loop(ser):
+    interval = 1.0 / SEND_RATE
+    next_send = time.monotonic()
+    last_print = 0.0
+
+    while running.is_set():
+        with state_lock:
+            beat = state["beat"]
+            state["beat"] = False
+
+            message = "{},{},{},{},{},{},{},{}\n".format(
+                state["mode"],
+                state["level"],
+                state["sub_bass"],
+                state["bass"],
+                state["mid"],
+                state["high"],
+                state["hue"],
+                1 if beat else 0,
+            )
+
+            snapshot = (state["db"], state["level"], state["sub_bass"],
+                        state["bass"], state["tone"], state["hue"],
+                        state["mode"])
+
+        try:
+            ser.write(message.encode("ascii"))
+        except serial.SerialException as error:
+            print("\nSerial error:", error, file=sys.stderr)
+            running.clear()
+            return
+
+        now = time.monotonic()
+
+        if now - last_print > 0.1:
+            last_print = now
+
+            db, level, sub_bass, bass, tone, hue, mode = snapshot
+
+            print(
+                f"\r"
+                f"{'ambient ' if mode == MODE_AMBIENT else 'reactive'}   "
+                f"dB {db:6.1f}   "
+                f"Level {level:3d}   "
+                f"Sub {sub_bass:3d}   "
+                f"Bass {bass:3d}   "
+                f"Tone {tone:6.0f} Hz   "
+                f"Hue {hue:5d} {hue_name(hue):7s}  "
+                f"{'BEAT' if beat else '    '}    ",
+                end="",
+                flush=True)
+
+        next_send += interval
+        time.sleep(max(0.0, next_send - time.monotonic()))
+
+
+# -----------------------------
+# KEYBOARD
+# -----------------------------
+
+
+def keyboard_loop():
+    if not sys.stdin.isatty():
+        return
+
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+
+    try:
+        tty.setcbreak(fd)
+
+        while running.is_set():
+            # Polled rather than blocking so shutdown always
+            # gets a chance to restore the terminal.
+            if not select.select([sys.stdin], [], [], 0.2)[0]:
+                continue
+
+            key = sys.stdin.read(1).lower()
+
+            if key == "m":
+                with state_lock:
+                    state["mode"] = (MODE_AMBIENT
+                                     if state["mode"] == MODE_REACTIVE
+                                     else MODE_REACTIVE)
+
+            elif key == "q":
+                running.clear()
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+
+
+# -----------------------------
+# START
+# -----------------------------
+
+
+def main():
+    require_blackhole_system_output()
+
+    input_device = find_audio_device()
+    output_device = find_audio_output_device()
+    input_name = sd.query_devices(input_device)["name"]
+    output_name = sd.query_devices(output_device)["name"]
+
+    port = find_arduino_port()
+
+    if port is None:
+        raise RuntimeError("Arduino not found")
+
+    print("Connecting to:", port)
+    print(f"Listening to: [{input_device}] {input_name}")
+    print(f"Playing through: [{output_device}] {output_name}")
+    print(f"Software audio delay: {AUDIO_DELAY_MS:.1f} ms")
+
+    ser = serial.Serial(port, BAUD, timeout=1)
+    delay_line = AudioDelayLine(AUDIO_DELAY_MS)
+
+    sender = threading.Thread(target=sender_loop, args=(ser,), daemon=True)
+    keyboard = threading.Thread(target=keyboard_loop, daemon=True)
+
+    try:
+        with sd.Stream(device=(input_device, output_device),
+                       channels=(2, 2),
+                       samplerate=SAMPLE_RATE,
+                       blocksize=BLOCK_SIZE,
+                       dtype="float32",
+                       latency="low",
+                       callback=make_audio_io_callback(delay_line)) as stream:
+            # Opening the serial port resets an Uno. Keep audio flowing during
+            # its boot delay so starting the visualizer does not mute music.
+            time.sleep(2)
+
+            output_latency_ms = stream.latency[1] * 1000.0
+            print(f"Output-device latency: {output_latency_ms:.1f} ms")
+            print("Press 'm' to switch between reactive and ambient, 'q' to quit.")
+
+            sender.start()
+            keyboard.start()
+
+            while running.is_set():
+                time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        running.clear()
+
+        if sender.is_alive():
+            sender.join(timeout=1.0)
+
+        if keyboard.is_alive():
+            keyboard.join(timeout=1.0)
+
+        try:
+            ser.write(b"0,0,0,0,0,0,0,0\n")
+            ser.flush()
+            time.sleep(0.1)
+        except serial.SerialException:
+            pass
+
+        ser.close()
+
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()
