@@ -3,14 +3,14 @@
 #include "mirrored_neopixel.h"
 
 // Each strip's DIN connects to its own Arduino digital pin.
-constexpr uint8_t LED_PINS[] = {6, 7, 8, 9};
+constexpr uint8_t LED_PINS[] = {5, 6, 7, 4};
 const uint8_t NUM_STRIPS = sizeof(LED_PINS) / sizeof(LED_PINS[0]);
-const uint8_t NUM_OUTPUT_PAIRS=NUM_STRIPS/2;
+const uint8_t NUM_OUTPUT_GROUPS=1;
 #if !defined(__AVR_ATmega328P__)
-#error "Parallel pin pairs and Timer1 timing require the ATmega328P Arduino Uno."
+#error "Parallel pin groups and Timer1 timing require the ATmega328P Arduino Uno."
 #endif
-static_assert(LED_PINS[0]==6 && LED_PINS[1]==7 && LED_PINS[2]==8 && LED_PINS[3]==9,
-              "Output pairs must be D6/D7 (PORTD) and D8/D9 (PORTB).");
+static_assert(LED_PINS[0]==5 && LED_PINS[1]==6 && LED_PINS[2]==7 && LED_PINS[3]==4,
+              "All outputs must be D5/D6/D7/D4 on PORTD.");
 // LED count per strip; all strips display the same complete frame.
 #define NUM_LEDS 300
 // Total current budget across all four strips, not a per-strip budget.
@@ -520,10 +520,10 @@ uint8_t brightnessForBudget(uint32_t rawSum) {
   return allowed<1 ? 1 : allowed;
 }
 
-// Two strips latch simultaneously per transmission; the buffer is unchanged
-// between pairs. Four physical strips now need only two data transmissions.
-void showPair(uint8_t index) {
-  if (!strip.selectPair(LED_PINS[index*2],LED_PINS[index*2+1])) return;
+// D5/D6/D7/D4 share PORTD: all four strips transmit and latch together.
+void showGroup(uint8_t index) {
+  if (index>=NUM_OUTPUT_GROUPS) return;
+  if (!strip.selectGroup(LED_PINS,NUM_STRIPS)) return;
   uint16_t timerStart=TCNT1;
   unsigned long microsStart=micros();
   strip.show();
@@ -545,18 +545,18 @@ void setup() {
   }
   Serial.begin(115200); strip.begin(); strip.setBrightness(MAX_BRIGHTNESS);
   strip.clear();
-  for (uint8_t i=0;i<NUM_OUTPUT_PAIRS;i++) showPair(i);
+  for (uint8_t i=0;i<NUM_OUTPUT_GROUPS;i++) showGroup(i);
   Serial.println("READY");
 }
 
 void loop() {
-  static uint8_t nextPair=0;
+  static uint8_t nextGroup=0;
   static unsigned long receiveStarted=0, nextPublishAt=0;
   static bool frameReady=false, pacingStarted=false;
   readSerial();
   unsigned long now=animationMillis();
   if (now-receiveStarted<3) return;
-  if (nextPair==0 && !frameReady) {
+  if (nextGroup==0 && !frameReady) {
     // Render ahead into the reusable buffer, then publish on the deadline.
     // LED chips keep displaying the preceding frame during this computation.
     unsigned long frameTime=pacingStarted && (int32_t)(nextPublishAt-now)>0 ? nextPublishAt : now;
@@ -577,7 +577,7 @@ void loop() {
     if (!pacingStarted) { nextPublishAt=renderEnd; pacingStarted=true; }
   }
   now=animationMillis();
-  if (nextPair==0) {
+  if (nextGroup==0) {
     if ((int32_t)(now-nextPublishAt)<0) return; // Continue serving serial.
     unsigned long late=now-nextPublishAt;
     if (perfEnabled && late>2) perfLateFrames++;
@@ -585,10 +585,10 @@ void loop() {
     nextPublishAt=now+FRAME_MS;
     frameReady=false;
   }
-  showPair(nextPair);
-  nextPair=(nextPair+1)%NUM_OUTPUT_PAIRS;
+  showGroup(nextGroup);
+  nextGroup=(nextGroup+1)%NUM_OUTPUT_GROUPS;
   receiveStarted=animationMillis();
-  if (perfEnabled && nextPair==0) {
+  if (perfEnabled && nextGroup==0) {
     perfFrames++;
     unsigned long elapsed=receiveStarted-perfSince;
     if (elapsed>=2000 && Serial.availableForWrite()>=48) {

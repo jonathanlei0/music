@@ -5,10 +5,10 @@ Upload `arduino.ino` to the Arduino Uno. Connect each strip's data input
 
 | Strip | Arduino pin |
 | --- | --- |
-| 1 | D6 |
-| 2 | D7 |
-| 3 | D8 |
-| 4 | D9 |
+| 1 | D5 |
+| 2 | D6 |
+| 3 | D7 |
+| 4 | D4 |
 
 Power the strips from an external supply appropriate for their voltage and
 connect the supply ground, strip grounds, and Arduino GND together. The Arduino
@@ -17,15 +17,16 @@ pins carry data only. Each strip connects directly to its assigned pin.
 The sketch assumes 300 LEDs per strip (`NUM_LEDS`). All four strips mirror the
 same complete frame: background, sparkle positions and colors, pulses and drop
 accents. The Arduino renders and applies brightness/current limits once, then
-sends that unchanged pixel buffer to D6/D7 simultaneously, then D8/D9 simultaneously. This removes three of
-four rendering passes. The two pairs latch sequentially, but the two strips within each pair latch together. Wiring and the binary music protocol are unchanged.
+sends that unchanged pixel buffer to D5/D6/D7/D4 simultaneously. All four strips
+share PORTD, so one transmission updates all four and they latch together.
+The binary music protocol is unchanged.
 
 `MAX_MILLIAMPS` is a combined estimated current budget for all four strips,
 currently 60000 mA for the 5 V / 60 A supply. This is a software estimate,
 not protection for wiring or connectors; power distribution must support the load.
 Brightness is limited before each frame is sent.
-Two mirrored 300-LED transmissions take about 18 ms total, plus rendering and
-6 ms of receive windows. Actual frame rate is measured with `--led-stats`. Physical playback and serial reception should
+One mirrored 300-LED transmission takes about 9 ms total, plus rendering and
+a 3 ms receive window. Actual frame rate is measured with `--led-stats`. Physical playback and serial reception should
 be checked after upload.
 
 The separate `led_count_probe` sketch remains a single-strip diagnostic on D6.
@@ -111,9 +112,9 @@ also enforces a 12-second cooldown so repeated drop packets cannot retrigger.
 Foreground rendering visits only the pixels
 covered by each effect; background color calculations use interpolated
 12-pixel anchors. UART input is drained between background segments, with a 3 ms
-nonblocking reception window after each strip rather than an 8 ms busy-wait.
-Each loop transmits one pair; rendering and animation advancement occur
-only before the first pair of each complete frame. Serial input continues
+nonblocking reception window after each output group rather than an 8 ms busy-wait.
+Each loop transmits one output group; rendering and animation advancement occur
+only before the first group of each complete frame. Serial input continues
 between transmissions, and new controls appear in the next rendered frame.
 The 19-byte music packet
 needs about 1.65 ms at 115200 baud; reception during LED transmission can still
@@ -122,8 +123,8 @@ lose packets, so physical timing remains approximate.
 The Uno's Timer1 is reserved as a free-running clock to measure time lost by
 `millis()` during NeoPixel transmission. Animation and packet timeout clocks
 include this correction. Do not combine this sketch with Servo or other Timer1
-users. Two paired 300-LED transmissions require roughly 18 ms,
-plus 6 ms of receive windows and rendering. Actual frame rate must be measured on the device.
+users. One grouped 300-LED transmission requires roughly 9 ms,
+plus a 3 ms receive window and rendering. Actual frame rate must be measured on the device.
 
 ## Section palettes
 
@@ -239,14 +240,15 @@ jumping between integer radii. Their edges use a rounded curve, and beat fade-in
 uses an 80 ms eased ramp. Background level follows a 180 ms rise / 300 ms fall;
 melody colors use a 160 ms response. The 320 ms host lead is unchanged. These
 changes soften transitions without adding waits or extra framebuffers; they do
-not raise the physical refresh rate of the Uno's paired outputs.
+not raise the physical refresh rate of the Uno's grouped outputs.
 
-## Paired output and actual frame-rate measurements
+## Grouped output and actual frame-rate measurements
 
 `mirrored_neopixel.h` uses the protected AVR pin mask in Adafruit_NeoPixel to
-send identical bits to both pins on the same hardware port. D6/D7 use PORTD;
-D8/D9 use PORTB. This reuses the library's existing timed transmission routine.
-No rewiring is needed. The sketch checks the Uno ATmega328P target and fixed pin
+send identical bits to pins on the same hardware port. D5/D6/D7/D4 all use PORTD.
+This reuses the library's existing timed transmission routine.
+When switching from the previous D5–D8 layout, power off and move only strip 4
+from D8 to D4, then upload the updated sketch. The sketch checks the Uno ATmega328P target and fixed pin
 layout at compile time. Other pins/boards require revisiting this implementation.
 
 After uploading, run:
@@ -280,5 +282,32 @@ of catch-up frames. This is a target, not a verified real-device frame rate.
 `max render` for each reporting window. Steady 20 FPS with zero late frames means
 the target is sustainable; late frames mean the target still exceeds the measured
 budget. Rendering itself can vary with active effects even when display cadence
-is fixed. Paired transmission, visual settings and the configured LED lead remain
+is fixed. Grouped transmission, visual settings and the configured LED lead remain
 unchanged. Upload and restart to measure the new firmware.
+
+
+## VirtualDJ audio source
+
+In VirtualDJ Settings > Audio, set the Master output device to **BlackHole 2ch**,
+channels **1 & 2**, and apply. Remove any additional direct Master output to
+speakers/AirPods to avoid hearing both direct and delayed playback. A separate
+Headphones output can remain on a physical device for undelayed cueing.
+
+Run from the project directory:
+
+```sh
+python3 audio_led.py 50 --audio-source virtualdj
+```
+
+The existing output default is AirPods. To use the Mac speakers instead:
+
+```sh
+python3 audio_led.py 50 --audio-source virtualdj --output-device "MacBook Pro"
+```
+
+This mode captures BlackHole directly without requiring it to be the macOS
+system output. The five-second audio delay and LED timing remain in place;
+VirtualDJ transport, fader, and effect changes reach the listening output five
+seconds later. Use a separate undelayed cue/monitor output for live mixing.
+Do not route the script's playback output back into BlackHole. The Arduino
+firmware does not need changing for this audio-source switch.

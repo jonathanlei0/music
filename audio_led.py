@@ -29,8 +29,7 @@ BLOCK_SIZE = 1024
 SEND_RATE = 50
 
 AUDIO_DEVICE_NAME = "BlackHole"
-AUDIO_DEVICE_FALLBACK = 0
-AUDIO_OUTPUT_DEVICE_NAME = "MacBook Pro"
+AUDIO_OUTPUT_DEVICE_NAME = "AirPods"
 
 # Audio is analyzed immediately, but heard five seconds later. LED events are
 # scheduled for the same delayed instant, including output-device latency.
@@ -106,6 +105,10 @@ def parse_args(argv=None):
                         help="send LEDs this many ms ahead of audio, 0–500 (default: 200)")
     parser.add_argument("--led-stats", action="store_true",
                         help="report measured Arduino FPS and render/transmit times")
+    parser.add_argument("--audio-source", choices=("system", "virtualdj"), default="system",
+                        help="system audio or VirtualDJ master routed directly to BlackHole")
+    parser.add_argument("--output-device", default=AUDIO_OUTPUT_DEVICE_NAME,
+                        help="playback device name or substring (default: %(default)s)")
     return parser.parse_args(argv)
 
 
@@ -132,18 +135,20 @@ def configure_effect(ser, name, value):
 
 def find_audio_device():
     for index, device in enumerate(sd.query_devices()):
-        if device["max_input_channels"] < 1:
+        if device["max_input_channels"] < 2:
             continue
         if AUDIO_DEVICE_NAME.lower() in device["name"].lower():
             return index
-    return AUDIO_DEVICE_FALLBACK
+    raise RuntimeError("BlackHole stereo input not found. Install/enable BlackHole 2ch before starting.")
 
 
-def find_audio_output_device():
+def find_audio_output_device(name=AUDIO_OUTPUT_DEVICE_NAME):
     for index, device in enumerate(sd.query_devices()):
         if device["max_output_channels"] < 2:
             continue
-        if AUDIO_OUTPUT_DEVICE_NAME.lower() in device["name"].lower():
+        if name.lower() in device["name"].lower():
+            if AUDIO_DEVICE_NAME.lower() in device["name"].lower():
+                raise RuntimeError("Playback output cannot be BlackHole: that would feed audio back into capture.")
             return index
 
     available = [
@@ -153,7 +158,7 @@ def find_audio_output_device():
     ]
     choices = "\n  ".join(available)
     raise RuntimeError(
-        f"Audio output containing {AUDIO_OUTPUT_DEVICE_NAME!r} was not found.\n"
+        f"Audio output containing {name!r} was not found.\n"
         f"Available stereo outputs:\n  {choices}"
     )
 
@@ -689,9 +694,12 @@ def main():
     args = parse_args()
     led_stats_enabled = args.led_stats
     led_lead_seconds = args.led_lead_ms / 1000.0
-    require_blackhole_system_output()
+    if args.audio_source == "system":
+        require_blackhole_system_output()
+    else:
+        print("VirtualDJ: route Master to BlackHole 2ch, channels 1 & 2; no direct master output.")
     input_device = find_audio_device()
-    output_device = find_audio_output_device()
+    output_device = find_audio_output_device(args.output_device)
     port = find_arduino_port()
 
     if port is None:

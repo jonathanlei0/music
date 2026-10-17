@@ -30,7 +30,7 @@ SEND_RATE = 50
 
 AUDIO_DEVICE_NAME = "BlackHole"
 AUDIO_DEVICE_FALLBACK = 0
-AUDIO_OUTPUT_DEVICE_NAME = "AirPods Pro"
+AUDIO_OUTPUT_DEVICE_NAME = "Digital Audio"
 
 # Audio is analyzed immediately, but heard five seconds later. LED events are
 # scheduled for the same delayed instant, including output-device latency.
