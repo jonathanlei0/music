@@ -44,6 +44,7 @@ class MusicalMotion:
 
     def __init__(self):
         self.energy = 0.0
+        self.bpm = 90.0
         self.phase = 0.0
         self.last_time = None
         self.deck_id = None
@@ -55,11 +56,20 @@ class MusicalMotion:
         self.note_from = None
         self.note_target = None
         self.note_changed_at = 0.0
+        self.note_fade_seconds = .45
+
+    def timing(self):
+        speed = KickPixels.ease((self.bpm-85)/55)
+        return dict(color_hold=.70-.52*speed,color_fade=.50-.34*speed,
+                    size_interval=.40-.28*speed,shrink=1.30-1.0*speed,
+                    grow=1.80-1.40*speed)
 
     def set_note(self, note, now):
         import colorsys
         pitch_class = note%12
         if pitch_class == self.note_class:
+            return
+        if self.note_class is not None and now-self.note_changed_at < self.timing()["color_hold"]:
             return
         self.note_from = self.colors(now)
         hue = pitch_class/12
@@ -67,10 +77,11 @@ class MusicalMotion:
                                  for h in (hue,(hue+.28)%1))
         self.note_class = pitch_class
         self.note_changed_at = now
+        self.note_fade_seconds = self.timing()["color_fade"]
 
     def colors(self, now):
         if self.note_target is not None:
-            blend = KickPixels.ease((now-self.note_changed_at)/.180)
+            blend = KickPixels.ease((now-self.note_changed_at)/self.note_fade_seconds)
             return tuple(tuple(a+(b-a)*blend for a,b in zip(old,new))
                          for old,new in zip(self.note_from,self.note_target))
         blend = KickPixels.ease((now-self.changed_at)/3)
@@ -93,6 +104,8 @@ class MusicalMotion:
                       for d in decks),default=0)
         self.energy += (target-self.energy)*(1-math.exp(-dt/1.2))
         bpm = min(200,max(50,candidate['bpm'])) if candidate else 90
+        if candidate:
+            self.bpm = bpm
         # Integrating velocity prevents position jumps when energy changes.
         self.phase = (self.phase+dt*bpm/60*(.12+.38*self.energy)) % (2*math.pi)
         if candidate is None:
@@ -110,9 +123,9 @@ class MusicalMotion:
 
 
 class KickPixels:
-    ATTACK_SECONDS = .050
-    HOLD_SECONDS = .060
-    RELEASE_SECONDS = .200
+    ATTACK_SECONDS = .080
+    HOLD_SECONDS = .080
+    RELEASE_SECONDS = .360
 
     def __init__(self, brightness=50):
         self.brightness = brightness
@@ -166,7 +179,7 @@ class KickPixels:
             if (continuous and int(beat//1)>int(self.tempo_beat//1)
                     and now-self.last_strong_kick > period*.55
                     and now-self.last_kick >= .220
-                    and self.envelope(now) <= .18):
+                    and not self.pulse_active(now)):
                 self.start_pulse(now,.18)
             self.tempo_deck, self.tempo_beat = candidate['id'],beat
         else:
@@ -176,8 +189,13 @@ class KickPixels:
             self.baseline = 0
             self.last_kick = float('-inf')
 
+    def pulse_active(self, now):
+        return now-self.last_kick < self.ATTACK_SECONDS+self.HOLD_SECONDS+self.RELEASE_SECONDS
+
     def start_pulse(self, now, peak):
-        self.pulse_start = self.envelope(now)
+        if self.pulse_active(now):
+            return False # Skip overlapping onsets, without postponing them.
+        self.pulse_start = 0.0
         self.pulse_peak = peak
         self.last_kick = now
         if self.beat_moved_at is None:
@@ -652,6 +670,8 @@ class EnergyShowPixels(IdleShowPixels):
         super().__init__(brightness)
         self.section_shares = [0.0,0.0,0.0]
         self.share_updated_at = None
+        self.coverage_targets = None
+        self.coverage_checked_at = float("-inf")
 
     def update(self, data, now):
         import math
@@ -672,9 +692,17 @@ class EnergyShowPixels(IdleShowPixels):
         total = sum(weights)
         coverage = self.ease(max(normalized,default=0)/.65)
         targets = [coverage*weight/total for weight in weights] if total > 1e-9 else [0,0,0]
+        timing = self.music.timing()
+        if self.coverage_targets is None:
+            self.coverage_targets = targets
+            self.coverage_checked_at = now
+        elif now-self.coverage_checked_at >= timing["size_interval"]:
+            self.coverage_checked_at = now
+            if sum(targets)==0 or max(abs(a-b) for a,b in zip(targets,self.coverage_targets)) >= .02:
+                self.coverage_targets = targets
         updated = []
-        for old,target in zip(self.section_shares,targets):
-            response = .8 if target < old else 1.0
+        for old,target in zip(self.section_shares,self.coverage_targets):
+            response = timing["shrink"] if target < old else timing["grow"]
             value = old+(target-old)*(1-math.exp(-dt/response))
             updated.append(0.0 if target == 0 and value < 1/600 else value)
         self.section_shares = updated
@@ -706,4 +734,8 @@ class EnergyShowPixels(IdleShowPixels):
                 split = left+instrumental_count
                 self.instrument_zones.append((left,split))
                 self.vocal_zones.append((split,left+used,(split+left+used-1)/2))
-        return super().render(now)
+        pixels = bytearray(super().render(now))
+        # LEDs 1–4 are a reserved steady orange marker, even during idle fades.
+        level = min(round(255*.05),round(255*self.brightness/100))
+        pixels[:12] = bytes((level,round(level*40/255),0))*4
+        return bytes(pixels)

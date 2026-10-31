@@ -35,8 +35,8 @@ class PixelTests(unittest.TestCase):
     def test_envelope_rises_and_falls_smoothly(self):
         effect = KickPixels()
         effect.update(packet(), 0)
-        attack = [effect.envelope(i/1000) for i in range(51)]
-        release = [effect.envelope(.11+i/1000) for i in range(201)]
+        attack = [effect.envelope(i/1000) for i in range(81)]
+        release = [effect.envelope(.16+i/1000) for i in range(361)]
         self.assertEqual(attack[0], 0)
         self.assertEqual(attack[-1], 1)
         self.assertEqual(release[0], 1)
@@ -44,9 +44,9 @@ class PixelTests(unittest.TestCase):
         self.assertTrue(all(a <= b for a,b in zip(attack,attack[1:])))
         self.assertTrue(all(a >= b for a,b in zip(release,release[1:])))
         self.assertLess(max(abs(effect.envelope(t+1/30)-effect.envelope(t))
-                            for t in (i/1000 for i in range(311))), .86)
+                            for t in (i/1000 for i in range(521))), .86)
 
-    def test_retrigger_preserves_current_brightness(self):
+    def test_overlapping_kick_does_not_restart_fade(self):
         effect = KickPixels()
         data = packet()
         effect.update(data, 0)
@@ -56,7 +56,8 @@ class PixelTests(unittest.TestCase):
         data['decks'][0]['kick'] = .2
         effect.update(data, .3)
         self.assertAlmostEqual(effect.envelope(.3), before)
-        self.assertGreater(effect.envelope(.34), before)
+        self.assertLess(effect.envelope(.34), before)
+        self.assertEqual(effect.last_kick,0)
 
     def test_muted_or_stopped_decks_are_black(self):
         for data in (packet(volume=0),packet(playing=0)):
@@ -215,7 +216,7 @@ class TempoFallbackTests(unittest.TestCase):
         self.assertEqual(effect.kick_count,0)
         self.assertEqual(effect.pulse_peak,.18)
 
-    def test_strong_kick_wins_and_upgrades_dim_pulse_smoothly(self):
+    def test_strong_kick_does_not_interrupt_dim_pulse(self):
         effect=KickPixels();data=packet(1.9)
         data['decks'][0]['kick']=0
         effect.update(data,0)
@@ -224,7 +225,8 @@ class TempoFallbackTests(unittest.TestCase):
         before=effect.envelope(.08)
         data['decks'][0]['kick']=.2
         effect.update(data,.08)
-        self.assertEqual(effect.pulse_peak,1)
+        self.assertEqual(effect.pulse_peak,.18)
+        self.assertEqual(effect.last_kick,.05)
         self.assertAlmostEqual(effect.envelope(.08),before)
         self.assertEqual(effect.kick_count,1)
 
@@ -273,3 +275,24 @@ class BeatPositionTests(unittest.TestCase):
             self.assertGreater(pixels[effect.beat_start*3],0)
             self.assertLessEqual(effect.beat_start+60,300)
         self.assertGreater(len(locations),4)
+
+
+class CompletedFadeTests(unittest.TestCase):
+    def test_skipped_kick_is_not_queued_and_new_kick_after_fade_works(self):
+        effect=KickPixels();data=packet()
+        effect.update(data,0)
+        data['decks'][0]['kick']=0;effect.update(data,.2)
+        data['decks'][0]['kick']=.2;effect.update(data,.3)
+        effect.update(data,.6) # Held signal must not replay the skipped onset.
+        self.assertEqual(effect.last_kick,0)
+        self.assertEqual(effect.envelope(.6),0)
+        data['decks'][0]['kick']=0;effect.update(data,.65)
+        data['decks'][0]['kick']=.3;effect.update(data,.9)
+        self.assertEqual(effect.last_kick,.9)
+        self.assertGreater(effect.envelope(.95),0)
+
+    def test_pulse_can_start_at_full_fade_boundary(self):
+        effect=KickPixels();effect.start_pulse(0,1)
+        self.assertFalse(effect.start_pulse(.519,1))
+        effect.start_pulse(.520,1)
+        self.assertEqual(effect.last_kick,.520)

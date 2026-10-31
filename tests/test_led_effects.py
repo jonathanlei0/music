@@ -24,12 +24,12 @@ class LayersTests(unittest.TestCase):
             callback(samples, output, 1024, timing, None)
         timestamp, audible, mono = captured.get_nowait()
         self.assertEqual(timestamp, 100)
-        self.assertAlmostEqual(audible, 105.12)
+        self.assertAlmostEqual(audible, 101.12)
         np.testing.assert_array_equal(output, samples)
         np.testing.assert_array_equal(mono, samples[:, 0])
 
     def test_led_lead_validation_and_timestamp_fallback(self):
-        self.assertEqual(parse_args([]).led_lead_ms, 200)
+        self.assertEqual(parse_args([]).led_lead_ms, 30)
         self.assertTrue(parse_args(['--led-stats']).led_stats)
         self.assertEqual(parse_args(['50', '--led-lead-ms', '120']).led_lead_ms, 120)
         with patch.object(audio_led, 'visual_delay_seconds', 5.2):

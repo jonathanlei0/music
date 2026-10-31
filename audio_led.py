@@ -9,6 +9,16 @@ import time
 import tty
 from collections import deque
 
+# Let the plain python3 entry point reuse the project's installed dependencies.
+if __name__ == '__main__':
+    import importlib.util
+    import os
+    from pathlib import Path
+    if importlib.util.find_spec('serial') is None:
+        python = Path(__file__).resolve().parent / 'venv/bin/python'
+        if python.is_file():
+            os.execv(str(python),[str(python),__file__,*sys.argv[1:]])
+
 import numpy as np
 import serial
 import serial.tools.list_ports
@@ -29,11 +39,11 @@ BLOCK_SIZE = 1024
 SEND_RATE = 50
 
 AUDIO_DEVICE_NAME = "BlackHole"
-AUDIO_OUTPUT_DEVICE_NAME = "AirPods"
+AUDIO_OUTPUT_DEVICE_NAME = "Digital"
 
-# Audio is analyzed immediately, but heard five seconds later. LED events are
-# scheduled for the same delayed instant, including output-device latency.
-AUDIO_DELAY_MS = 5000.0
+# Default added audio delay. The system_audio_led runner schedules RGB frames
+# against callback playback timestamps, including output-device latency.
+AUDIO_DELAY_MS = 1000.0
 
 NUM_LEDS = 300
 BASS_BAND = (80, 180)
@@ -94,22 +104,37 @@ def led_lead_ms(value):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Play audio with five-second LED look-ahead.")
+    parser = argparse.ArgumentParser(description=(
+        "Continuous audio playback/analysis service; no Arduino connection."
+        if argv and "--audio-only" in argv else
+        "LED-only renderer; use audio_playback.py separately for continuous music."))
     parser.add_argument(
         "brightness", nargs="?", type=brightness_percent, default=100,
         help="maximum LED brightness percentage, 0–100 (default: 100)",
     )
     parser.add_argument("--darkness", type=brightness_percent, default=65,
-                        help="background dark-gap amount, 0–100 (default: 65)")
-    parser.add_argument("--led-lead-ms", type=led_lead_ms, default=200.0,
-                        help="send LEDs this many ms ahead of audio, 0–500 (default: 200)")
+                        help="legacy option, accepted but ignored by the shared RGB renderer")
+    parser.add_argument("--led-lead-ms", type=led_lead_ms, default=30.0,
+                        help="send LEDs this many ms ahead of audio, 0–500 (default: 30)")
     parser.add_argument("--led-stats", action="store_true",
-                        help="report measured Arduino FPS and render/transmit times")
+                        help="report measured host RGB send rate")
     parser.add_argument("--audio-source", choices=("system", "virtualdj"), default="system",
                         help="system audio or VirtualDJ master routed directly to BlackHole")
     parser.add_argument("--output-device", default=AUDIO_OUTPUT_DEVICE_NAME,
                         help="playback device name or substring (default: %(default)s)")
-    return parser.parse_args(argv)
+    parser.add_argument('--serial-port', help='Arduino port (otherwise auto-detect)')
+    parser.add_argument('--delay-ms', type=float, default=1000,
+                        help='added audio delay in ms, 500–5000 (default: 1000)')
+    parser.add_argument('--audio-only', action='store_true',
+                        help='run continuous audio playback/analysis service, without LEDs')
+    parser.add_argument('--analysis-port', type=int, default=19786,
+                        help='local audio-to-LED analysis port (default: 19786)')
+    args = parser.parse_args(argv)
+    if not 1024 <= args.analysis_port <= 65535:
+        parser.error('--analysis-port must be 1024–65535')
+    if not math.isfinite(args.delay_ms) or not 500 <= args.delay_ms <= 5000:
+        parser.error('--delay-ms must be between 500 and 5000')
+    return args
 
 
 def configure_brightness(ser, percent):
@@ -688,7 +713,7 @@ def keyboard_loop():
 # START
 # -----------------------------
 
-def main():
+def legacy_main():
     global visual_delay_seconds, led_lead_seconds, led_stats_enabled
 
     args = parse_args()
@@ -781,6 +806,15 @@ def main():
 
         ser.close()
         print("\nStopped.")
+
+
+def main():
+    from system_audio_led import run
+    try:
+        run(parse_args())
+    except (OSError, RuntimeError, serial.SerialException, sd.PortAudioError) as exc:
+        print(f'Error: {exc}',file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

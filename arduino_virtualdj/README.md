@@ -18,7 +18,9 @@ python3 virtualdj_led.py 50
 Enable LED Stem Bridge in VirtualDJ. The brightness argument is a percentage.
 `--monitor` shows meters without opening the Arduino. `--darkness` is accepted
 for command compatibility but has no effect on this kick-only renderer.
-Old 115200-baud feature senders, including audio_led.py, cannot drive this firmware.
+Old 115200-baud feature senders cannot drive this firmware. The updated
+audio_led.py system-audio entry point now uses this same 500000-baud protocol;
+see ../SYSTEM_AUDIO_LED.md. Run only one LED sender at a time.
 
 ## Current effect
 
@@ -338,3 +340,58 @@ travel and oscillating sway are disabled. Existing particles still hop forward
 or backward 3–5 LEDs on strong kicks, eased over 50 ms. Spawning, soft fades,
 colors and instrumental-variation density remain unchanged. Drop-show comets
 are a separate rare effect. 63 VirtualDJ tests pass.
+
+## Softer orange accents
+
+Orange beat pulses now ease up over 80 ms, hold for 80 ms and fade over 360 ms.
+This replaces the earlier 50/60/200 ms envelope, reducing sharp brightness changes
+and dark gaps at common dance tempos. Retriggers still start at the current
+brightness. Applies to system audio and VirtualDJ; restart the active Python
+sender. All 86 Python tests pass.
+
+
+## Independent system-audio playback
+
+System audio now uses two processes: `python3 audio_playback.py` keeps music
+running with its one-second delay and spectral analysis, while `python3
+audio_led.py 50` is LED-only. Restart the latter after effect edits without
+interrupting the former. See ../SYSTEM_AUDIO_LED.md. Earlier combined-process
+instructions are superseded. All 89 Python tests pass.
+
+## Complete orange fades before retriggering
+
+Orange pulses now finish the entire 80 ms rise, 80 ms hold and 360 ms fade
+(520 ms total) before another can begin. Strong kicks and dim fallback beats
+cannot interrupt an active pulse. Overlapping onsets are consumed and skipped,
+not queued for late playback. Strong-beat detection still drives existing
+sparkle hops independently. Restart only the LED sender; audio_playback.py can
+continue running. All 91 Python tests pass.
+
+## Steady orange start marker
+
+LEDs 1–4 (zero-based pixels 0–3) are now reserved at 5% full-scale orange,
+including idle periods and transitions. Final rendering fixes their color so
+other layers do not overwrite the marker. A user brightness setting below 5%
+limits it further; brightness zero still turns everything off. It requires the
+LED sender to remain running; stopping it still sends black. All 93 tests pass.
+
+## Less frequent section resizing and color changes
+
+Coverage targets now refresh at most every 350 ms and ignore changes below two
+percentage points, with 1.2-second shrink / 1.6-second growth time constants.
+Zero-energy targets always clear. Note-driven section colors change at most
+once every 600 ms and blend over 450 ms. Note analysis, sparkle hops and orange
+beat envelopes keep their existing timing. All 95 Python tests pass. Restart
+only the LED process; audio playback remains independent.
+
+## Tempo-adaptive section timing
+
+Resizing and note-color timing now follow the clock deck's BPM. At 85 BPM or
+slower, target sizes refresh every 400 ms, colors hold at least 700 ms and fade
+over 500 ms, with 1.3-second shrink / 1.8-second grow time constants. At 140 BPM
+or faster, these become 120 ms size refresh, 180 ms color hold, 160 ms color fade,
+and 300 ms shrink / 400 ms grow. Intermediate tempos interpolate smoothly.
+An active color fade retains its duration even if BPM changes mid-transition.
+The existing two-percentage-point sizing deadband and strong-beat pulse envelope
+remain. System-audio BPM is estimated and can take several beats to settle.
+All 97 Python tests pass.

@@ -6,7 +6,7 @@ from test_virtualdj_led import packet
 class CoverageTests(unittest.TestCase):
     def settle(self, bass, vocal, instrument):
         effect=EnergyShowPixels();data=packet()
-        for i in range(200):
+        for i in range(400):
             now=i*.05
             data['decks'][0].update(bass=bass,vocal=vocal,instru=instrument,kick=0,beatpos=now*2)
             effect.update(data,now)
@@ -29,7 +29,7 @@ class CoverageTests(unittest.TestCase):
             occupied+=sum(stop-start for start,stop,center in effect.vocal_zones)
             occupied+=sum(stop-start for start,stop in effect.instrument_zones)
             self.assertEqual(occupied,300)
-            self.assertEqual(len(effect.render(9.95)),900)
+            self.assertEqual(len(effect.render(19.95)),900)
 
     def test_coverage_changes_smoothly_and_duplicate_decks_do_not_amplify(self):
         one=EnergyShowPixels();two=EnergyShowPixels();data=packet()
@@ -59,5 +59,51 @@ class CoverageTests(unittest.TestCase):
     def test_absent_stems_fade_to_zero_allocation(self):
         effect=self.settle(.4,0,0)
         data=packet();data['decks'][0].update(bass=0,kick=0,vocal=0,instru=0)
-        for i in range(200):effect.update(data,10+i*.05)
+        for i in range(400):effect.update(data,20+i*.05)
         self.assertEqual(effect.section_shares,[0,0,0])
+
+    def test_first_four_leds_are_steady_five_percent_orange(self):
+        effect=EnergyShowPixels(50)
+        self.assertEqual(effect.render(0)[:12],bytes((13,2,0))*4)
+        self.assertEqual(effect.render(1)[:12],bytes((13,2,0))*4)
+        effect.update(packet(),1.1)
+        self.assertEqual(effect.render(1.1)[:12],bytes((13,2,0))*4)
+
+    def test_orange_marker_respects_zero_and_lower_user_brightness(self):
+        self.assertEqual(EnergyShowPixels(0).render(0),bytes(900))
+        self.assertEqual(EnergyShowPixels(2).render(0)[:12],bytes((5,1,0))*4)
+
+    def test_size_targets_wait_between_updates(self):
+        effect=EnergyShowPixels();data=packet()
+        effect.update(data,0);original=list(effect.coverage_targets)
+        data['decks'][0].update(bass=1,vocal=0,instru=0)
+        effect.update(data,.1)
+        self.assertEqual(effect.coverage_targets,original)
+        effect.update(data,.4)
+        self.assertNotEqual(effect.coverage_targets,original)
+
+    def test_fast_song_updates_sizes_and_colors_sooner_than_slow_song(self):
+        slow=EnergyShowPixels();fast=EnergyShowPixels()
+        low=packet();high=packet()
+        low['decks'][0]['bpm']=70;high['decks'][0]['bpm']=145
+        slow.update(low,0);fast.update(high,0)
+        slow.music.set_note(60,0);fast.music.set_note(60,0)
+        slow.music.set_note(64,.25);fast.music.set_note(64,.25)
+        self.assertEqual(slow.music.note_class,0)
+        self.assertEqual(fast.music.note_class,4)
+        before_slow=list(slow.coverage_targets)
+        before_fast=list(fast.coverage_targets)
+        low['decks'][0].update(bass=1,vocal=0,instru=0)
+        high['decks'][0].update(bass=1,vocal=0,instru=0)
+        slow.update(low,.2);fast.update(high,.2)
+        self.assertEqual(slow.coverage_targets,before_slow)
+        self.assertNotEqual(fast.coverage_targets,before_fast)
+        self.assertLess(fast.music.timing()['grow'],slow.music.timing()['grow'])
+
+    def test_color_fade_duration_stays_fixed_when_tempo_changes_mid_fade(self):
+        effect=EnergyShowPixels();data=packet()
+        data['decks'][0]['bpm']=70;effect.update(data,0)
+        effect.music.set_note(60,0)
+        before=effect.music.colors(.1)
+        data['decks'][0]['bpm']=145;effect.update(data,.1)
+        self.assertEqual(effect.music.colors(.1),before)
