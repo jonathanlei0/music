@@ -13,13 +13,14 @@ from virtualdj_pixels import EnergyShowPixels
 
 class SystemAudioTests(unittest.TestCase):
     def test_delay_defaults_and_invalid_delays(self):
-        self.assertEqual(parse_args([]).delay_ms,1000)
-        for value in ('nan','inf','-1','0','5001'):
+        self.assertEqual(parse_args([]).delay_ms,50)
+        self.assertEqual(parse_args(["--delay-ms","50"]).delay_ms,50)
+        for value in ('nan','inf','-1','0','49','5001'):
             with contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
                 parse_args(['--delay-ms',value])
 
     def test_actual_callback_delays_impulse_exactly_one_second_and_schedules(self):
-        lighting=SystemLighting(parse_args(['50']))
+        lighting=SystemLighting(parse_args(['50','--delay-ms','1000']))
         # Use callback blocks of varying sizes to exercise delay across boundaries.
         frames=512;source=np.zeros((SAMPLE_RATE+frames*2,2),dtype=np.float32)
         source[0]=1;outputs=[]

@@ -48,7 +48,7 @@ AUDIO_OUTPUT_DEVICE_NAME = "Digital"
 
 # Default added audio delay. The system_audio_led runner schedules RGB frames
 # against callback playback timestamps, including output-device latency.
-AUDIO_DELAY_MS = 1000.0
+AUDIO_DELAY_MS = 50.0
 
 NUM_LEDS = 300
 BASS_BAND = (80, 180)
@@ -128,8 +128,8 @@ def parse_args(argv=None):
     parser.add_argument("--output-device", default=AUDIO_OUTPUT_DEVICE_NAME,
                         help="playback device name or substring (default: %(default)s)")
     parser.add_argument('--serial-port', help='Arduino port (otherwise auto-detect)')
-    parser.add_argument('--delay-ms', type=float, default=1000,
-                        help='added audio delay in ms, 500–5000 (default: 1000)')
+    parser.add_argument('--delay-ms', type=float, default=50,
+                        help='added audio delay in ms, 50–5000 (default: 50)')
     parser.add_argument('--debug-startup', action='store_true',
                         help='dump a traceback if startup stalls for 15 seconds')
     parser.add_argument('--audio-only', action='store_true',
@@ -139,8 +139,8 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if not 1024 <= args.analysis_port <= 65535:
         parser.error('--analysis-port must be 1024–65535')
-    if not math.isfinite(args.delay_ms) or not 500 <= args.delay_ms <= 5000:
-        parser.error('--delay-ms must be between 500 and 5000')
+    if not math.isfinite(args.delay_ms) or not 50 <= args.delay_ms <= 5000:
+        parser.error('--delay-ms must be between 50 and 5000')
     return args
 
 

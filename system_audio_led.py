@@ -88,7 +88,10 @@ class SystemLighting:
                         with self.lock:
                             while self.schedule:pending.append(self.schedule.popleft())
                         for due,data,note in pending:
-                            packet = dict(version=1,session=session,seq=sequence,due=due,
+                            # Wall-clock timestamps cross process boundaries safely on older
+                            # macOS Python; each receiver converts to its local monotonic clock.
+                            wire_due = time.time()+(due-time.monotonic())
+                            packet = dict(version=1,session=session,seq=sequence,due=wire_due,clock='unix',
                                           data=data,note=asdict(note) if note else None)
                             sequence += 1
                             try:

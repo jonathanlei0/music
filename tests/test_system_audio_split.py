@@ -85,3 +85,16 @@ class SplitTests(unittest.TestCase):
                 service.stop.set();thread.join(timeout=2)
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors,[])
+
+    def test_unix_timestamps_work_with_different_process_clock_origins(self):
+        buffer=AnalysisBuffer(.04)
+        packet=json.loads(message(100))
+        packet.update(clock='unix',due=1700000001)
+        with patch('system_led_receiver.time.time',return_value=1700000000):
+            self.assertTrue(buffer.accept(json.dumps(packet).encode(),90000))
+        self.assertAlmostEqual(buffer.frames[0][0],90000.96)
+        self.assertEqual(buffer.accepted,1)
+        self.assertEqual(buffer.rejected,0)
+        self.assertFalse(buffer.accept(b'bad',90000))
+        self.assertEqual(buffer.received,2)
+        self.assertEqual(buffer.rejected,1)

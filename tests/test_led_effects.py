@@ -24,7 +24,7 @@ class LayersTests(unittest.TestCase):
             callback(samples, output, 1024, timing, None)
         timestamp, audible, mono = captured.get_nowait()
         self.assertEqual(timestamp, 100)
-        self.assertAlmostEqual(audible, 101.12)
+        self.assertAlmostEqual(audible, 100.17)
         np.testing.assert_array_equal(output, samples)
         np.testing.assert_array_equal(mono, samples[:, 0])
 

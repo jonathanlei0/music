@@ -16,11 +16,27 @@ class AnalysisBuffer:
         self.frames=deque(maxlen=256)
         self.session=None
         self.sequence=-1
+        self.received=0
+        self.accepted=0
+        self.rejected=0
+        self.expired=0
 
     def accept(self, raw, now):
+        self.received += 1
+        accepted = self._accept(raw,now)
+        if accepted:self.accepted += 1
+        else:self.rejected += 1
+        return accepted
+
+    def _accept(self, raw, now):
         try:
             packet=json.loads(raw)
             due=packet['due'];seq=packet['seq'];session=packet['session']
+            if packet.get('clock')=='unix':
+                if not isinstance(due,(int,float)) or not math.isfinite(due):return False
+                due=now+(due-time.time())
+            elif packet.get('clock','monotonic')!='monotonic':
+                return False
             if (packet['version']!=1 or not isinstance(due,(int,float)) or not math.isfinite(due)
                     or not now-.15 <= due <= now+6 or not isinstance(seq,int)
                     or not isinstance(session,str) or len(session)!=32):return False
@@ -51,6 +67,7 @@ class AnalysisBuffer:
         while self.frames and self.frames[0][0]<=now:
             frame=self.frames.popleft()
             if now-frame[0]<=.15:result.append(frame)
+            else:self.expired += 1
         return result
 
 
@@ -81,6 +98,7 @@ def run(args):
             reading=MelodyReading()
             next_frame=last_print=0
             frames=0;stats_at=time.monotonic()
+            last_print=stats_at
             print('LED-only renderer. Start audio_playback.py in another terminal. '
                   'Restarting this process does not stop music.',flush=True)
             while True:
@@ -101,7 +119,7 @@ def run(args):
                 if now-last_print>2:
                     fresh=renderer.last_update is not None and now-renderer.last_update<=.3
                     state='Receiving audio analysis' if fresh else 'Waiting for audio service; idle gradient'
-                    print(f'{state} | kicks={renderer.kick_count} drops={renderer.drop_count}',flush=True)
+                    print(f'{state} | packets={buffer.received} accepted={buffer.accepted} rejected={buffer.rejected} expired={buffer.expired} | kicks={renderer.kick_count} drops={renderer.drop_count}',flush=True)
                     if args.led_stats:
                         print(f'RGB sends: {frames/max(.001,now-stats_at):.1f} FPS',flush=True)
                         frames=0;stats_at=now
