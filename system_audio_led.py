@@ -21,7 +21,7 @@ class SystemLighting:
         self.stop = threading.Event()
         self.error = None
         self.status = ''
-        self.dropped = self.late = 0
+        self.dropped = self.late = self.expired = 0
 
     def callback(self, indata, outdata, frames, timing, status):
         if status:
@@ -49,9 +49,15 @@ class SystemLighting:
                 try:captured,due,audio = self.input.get(timeout=.1)
                 except queue.Empty:continue
                 data,note = analyzer.process(audio,captured)
-                if time.monotonic()>due:
+                finished = time.monotonic()
+                if finished>due:
                     self.late += 1
-                    continue # Don't replay obsolete beats after an analysis stall.
+                    if finished-due > .25:
+                        self.expired += 1
+                        continue # A long stall must not replay obsolete beats.
+                    # At short audio delays, prefer slightly late lights to no
+                    # lights. This changes only LED scheduling, never playback.
+                    due = finished+.04
                 with self.lock:
                     self.schedule.append((due,data,note))
         except Exception as exc:
@@ -101,7 +107,7 @@ class SystemLighting:
                                 pass # LED delivery must never interrupt music.
                         now = time.monotonic()
                         if now-last_print>3:
-                            print(f'Audio running | analysis late={self.late} skipped={self.dropped}',flush=True)
+                            print(f'Audio running | analysis late={self.late} expired={self.expired} skipped={self.dropped}',flush=True)
                             if self.status:print(f'Audio: {self.status}',flush=True);self.status=''
                             last_print=now
                         self.stop.wait(.005)

@@ -114,3 +114,10 @@ updated audio_led.py to other machines so their argument parser accepts 50 ms.
 
 The default added audio delay is now 50 ms. Run audio_playback.py without a
 delay argument to use it; an explicit --delay-ms value still overrides the default.
+
+At the 50 ms default, analysis slightly missing playback time is now forwarded
+with a near-future LED timestamp rather than discarded. This may delay visuals
+slightly but does not change music delay. Analysis more than 250 ms overdue is
+still discarded to avoid replaying old beats. Audio logs show late= (retiming)
+and expired= (discarded frames). Copy updated system_audio_led.py and restart the
+audio service to enable this fix. All 100 Python tests pass.

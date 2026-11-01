@@ -79,3 +79,33 @@ class SystemAudioTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertIsNone(lighting.error)
         self.assertEqual(lighting.schedule[0][0],due)
+
+    def test_slightly_late_analysis_still_reaches_lights(self):
+        lighting=SystemLighting(parse_args(['--delay-ms','50']))
+        fake_analyzer=SimpleNamespace(process=lambda audio,captured:(dict(decks=[]),None))
+        now=100.0
+        lighting.input.put((99.94,99.96,np.zeros((1024,2),dtype=np.float32)))
+        # Stop after processing this one queued block.
+        original_get=lighting.input.get
+        def get(*args,**kwargs):
+            item=original_get(*args,**kwargs)
+            lighting.stop.set()
+            return item
+        with patch.object(lighting.input,'get',side_effect=get),              patch('system_audio_led.SpectralStems',return_value=fake_analyzer),              patch('system_audio_led.time.monotonic',return_value=now):
+            lighting.analyze()
+        self.assertIsNone(lighting.error)
+        self.assertEqual(lighting.late,1)
+        self.assertEqual(lighting.expired,0)
+        self.assertAlmostEqual(lighting.schedule[0][0],100.04)
+
+    def test_long_stale_analysis_is_still_discarded(self):
+        lighting=SystemLighting(parse_args([]))
+        fake_analyzer=SimpleNamespace(process=lambda audio,captured:(dict(decks=[]),None))
+        lighting.input.put((98,99,np.zeros((1024,2),dtype=np.float32)))
+        original_get=lighting.input.get
+        def get(*args,**kwargs):
+            item=original_get(*args,**kwargs);lighting.stop.set();return item
+        with patch.object(lighting.input,'get',side_effect=get),              patch('system_audio_led.SpectralStems',return_value=fake_analyzer),              patch('system_audio_led.time.monotonic',return_value=100):
+            lighting.analyze()
+        self.assertEqual(lighting.expired,1)
+        self.assertEqual(len(lighting.schedule),0)
