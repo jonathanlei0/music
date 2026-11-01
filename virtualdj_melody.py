@@ -1,6 +1,7 @@
 """Best-effort dominant-pitch tracking of BlackHole's full mix, off the audio callback."""
 from collections import deque
 from dataclasses import dataclass
+from typing import Optional
 import threading
 import time
 
@@ -12,7 +13,7 @@ from audio_led import (SAMPLE_RATE, PITCH_WINDOW_SIZE, PITCH_MIN_CONFIDENCE,
 
 @dataclass(frozen=True)
 class MelodyReading:
-    note: int | None = None
+    note: Optional[int] = None
     confidence: float = 0.0
     strength: float = 0.0
     at: float = 0.0
