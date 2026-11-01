@@ -61,11 +61,18 @@ def run(args):
         receiver.bind(('127.0.0.1',args.analysis_port))
         receiver.setblocking(False)
         try:
+            print('Searching for Arduino...',flush=True)
             port=args.serial_port or find_arduino_port()
             if not port:raise RuntimeError('Arduino not found.')
+            print(f'Opening {port} at 500000 baud...',flush=True)
             ser=serial.Serial(port,500000,timeout=.03,write_timeout=.2)
+            print('Waiting for Arduino reset...',flush=True)
             time.sleep(2);ser.reset_input_buffer()
+            print('Checking RGB firmware acknowledgement...',flush=True)
             link=PixelLink(ser);link.send(BLACK)
+            if getattr(args,'debug_startup',False):
+                import faulthandler
+                faulthandler.cancel_dump_traceback_later()
             # Discard startup datagrams; rebuild timing from fresh future frames.
             for _ in range(512):
                 try:receiver.recv(16384)

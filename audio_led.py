@@ -11,6 +11,11 @@ from collections import deque
 
 # Let the plain python3 entry point reuse the project's installed dependencies.
 if __name__ == '__main__':
+    print('Loading LED dependencies...',flush=True)
+    if '--debug-startup' in sys.argv:
+        import faulthandler
+        faulthandler.enable()
+        faulthandler.dump_traceback_later(15,repeat=False)
     import importlib.util
     import os
     from pathlib import Path
@@ -125,6 +130,8 @@ def parse_args(argv=None):
     parser.add_argument('--serial-port', help='Arduino port (otherwise auto-detect)')
     parser.add_argument('--delay-ms', type=float, default=1000,
                         help='added audio delay in ms, 500–5000 (default: 1000)')
+    parser.add_argument('--debug-startup', action='store_true',
+                        help='dump a traceback if startup stalls for 15 seconds')
     parser.add_argument('--audio-only', action='store_true',
                         help='run continuous audio playback/analysis service, without LEDs')
     parser.add_argument('--analysis-port', type=int, default=19786,
@@ -809,6 +816,7 @@ def legacy_main():
 
 
 def main():
+    print('Loading controller modules...',flush=True)
     from system_audio_led import run
     try:
         run(parse_args())
