@@ -48,7 +48,7 @@ AUDIO_OUTPUT_DEVICE_NAME = "Digital"
 
 # Default added audio delay. The system_audio_led runner schedules RGB frames
 # against callback playback timestamps, including output-device latency.
-AUDIO_DELAY_MS = 50.0
+AUDIO_DELAY_MS = 500.0
 
 NUM_LEDS = 300
 BASS_BAND = (80, 180)
@@ -108,6 +108,21 @@ def led_lead_ms(value):
     return result
 
 
+def led_color(value):
+    colors = {
+        'red': (255, 0, 0), 'orange': (255, 120, 0), 'yellow': (255, 255, 0),
+        'green': (0, 255, 0), 'cyan': (0, 255, 255), 'blue': (0, 0, 255),
+        'purple': (150, 0, 255), 'pink': (255, 45, 140), 'white': (255, 255, 255),
+        'black': (0, 0, 0),
+    }
+    value = value.lower()
+    if value in colors:
+        return colors[value]
+    if len(value) == 7 and value[0] == '#' and all(c in '0123456789abcdef' for c in value[1:]):
+        return tuple(int(value[i:i+2], 16) for i in (1, 3, 5))
+    raise argparse.ArgumentTypeError(f'unknown color {value!r}; use a color name or #RRGGBB')
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=(
         "Continuous audio playback/analysis service; no Arduino connection."
@@ -128,15 +143,22 @@ def parse_args(argv=None):
     parser.add_argument("--output-device", default=AUDIO_OUTPUT_DEVICE_NAME,
                         help="playback device name or substring (default: %(default)s)")
     parser.add_argument('--serial-port', help='Arduino port (otherwise auto-detect)')
-    parser.add_argument('--delay-ms', type=float, default=50,
-                        help='added audio delay in ms, 50–5000 (default: 50)')
+    parser.add_argument('--delay-ms', type=float, default=AUDIO_DELAY_MS,
+                        help=f'added audio delay in ms, 50–5000 (default: {AUDIO_DELAY_MS:g})')
     parser.add_argument('--debug-startup', action='store_true',
                         help='dump a traceback if startup stalls for 15 seconds')
     parser.add_argument('--audio-only', action='store_true',
                         help='run continuous audio playback/analysis service, without LEDs')
     parser.add_argument('--analysis-port', type=int, default=19786,
                         help='local audio-to-LED analysis port (default: 19786)')
+    fixed = parser.add_mutually_exclusive_group()
+    fixed.add_argument('--color', type=led_color, metavar='COLOR',
+                       help='hold a solid color (e.g. blue or "#3366ff")')
+    fixed.add_argument('--gradient', type=led_color, nargs=2, metavar=('START', 'END'),
+                       help='hold a gradient from the first color to the second')
     args = parser.parse_args(argv)
+    if args.audio_only and (args.color is not None or args.gradient is not None):
+        parser.error('--color and --gradient are only available in LED mode')
     if not 1024 <= args.analysis_port <= 65535:
         parser.error('--analysis-port must be 1024–65535')
     if not math.isfinite(args.delay_ms) or not 50 <= args.delay_ms <= 5000:

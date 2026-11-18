@@ -1,5 +1,6 @@
 """Restartable LED renderer: receives scheduled analysis, never opens audio."""
 from collections import deque
+from contextlib import nullcontext
 import json
 import math
 import socket
@@ -7,7 +8,7 @@ import time
 import serial
 from audio_led import find_arduino_port
 from virtualdj_melody import MelodyReading
-from virtualdj_pixels import EnergyShowPixels, PixelLink, BLACK
+from virtualdj_pixels import EnergyShowPixels, PixelLink, BLACK, NUM_LEDS
 
 
 class AnalysisBuffer:
@@ -71,12 +72,24 @@ class AnalysisBuffer:
         return result
 
 
+def fixed_frame(args):
+    if args.color is not None:
+        return bytes(round(c * args.brightness / 100) for c in args.color) * NUM_LEDS
+    if args.gradient is not None:
+        left, right = args.gradient
+        return bytes(round((a + (b-a)*i/(NUM_LEDS-1)) * args.brightness / 100)
+                     for i in range(NUM_LEDS) for a, b in zip(left, right))
+    return None
+
+
 def run(args):
+    still = fixed_frame(args)
     buffer=AnalysisBuffer(args.led_lead_ms/1000)
     ser=None;link=None
-    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as receiver:
-        receiver.bind(('127.0.0.1',args.analysis_port))
-        receiver.setblocking(False)
+    with (socket.socket(socket.AF_INET,socket.SOCK_DGRAM) if still is None else nullcontext()) as receiver:
+        if receiver is not None:
+            receiver.bind(('127.0.0.1',args.analysis_port))
+            receiver.setblocking(False)
         try:
             print('Searching for Arduino...',flush=True)
             port=args.serial_port or find_arduino_port()
@@ -86,10 +99,17 @@ def run(args):
             print('Waiting for Arduino reset...',flush=True)
             time.sleep(2);ser.reset_input_buffer()
             print('Checking RGB firmware acknowledgement...',flush=True)
-            link=PixelLink(ser);link.send(BLACK)
+            link=PixelLink(ser);link.send(BLACK if still is None else still)
             if getattr(args,'debug_startup',False):
                 import faulthandler
                 faulthandler.cancel_dump_traceback_later()
+            if still is not None:
+                print(f'Fixed {"color" if args.color is not None else "gradient"} '
+                      f'at {args.brightness}% brightness. Ctrl+C turns the LEDs off.',flush=True)
+                while True:
+                    # Keep the firmware watchdog alive without animating the frame.
+                    time.sleep(.1)
+                    link.send(still)
             # Discard startup datagrams; rebuild timing from fresh future frames.
             for _ in range(512):
                 try:receiver.recv(16384)

@@ -12,7 +12,7 @@ Set macOS Sound output to **BlackHole 2ch**, then run:
 python3 audio_playback.py
 ```
 
-This captures BlackHole, adds 50 ms of sample delay, plays to the configured output (currently matching "Digital"),
+This captures BlackHole, adds 500 ms of sample delay, plays to the configured output (currently matching "Digital"),
 and estimates spectral stems. It never opens the Arduino. For Mac speakers:
 
 ```sh
@@ -35,7 +35,20 @@ editing virtualdj_pixels.py, Ctrl+C **only in Terminal 2**, then run the command
 again. Music in Terminal 1 keeps playing. LED startup may take a few seconds to
 reset the Uno and refill the timing buffer. No Arduino upload is required.
 
-Brightness is a percentage. Optional controls:
+Brightness is a percentage. To keep the strip fixed instead of reacting to music,
+stop the LED process and restart it with a solid color or a two-color gradient:
+
+```sh
+python3 audio_led.py 20 --color blue
+python3 audio_led.py 20 --gradient orange red
+python3 audio_led.py 20 --gradient '#3366ff' '#ff7800'
+```
+
+Fixed modes cover the entire strip and stay steady until you press Ctrl+C. They
+work with or without the audio service. Run without either flag to restore
+music-reactive lighting.
+
+Optional controls for music-reactive mode:
 
 ```sh
 python3 audio_led.py 50 --led-lead-ms 30 --led-stats
@@ -53,7 +66,7 @@ Restarted LEDs reconnect automatically to analysis broadcast on localhost UDP
 
 ## Delay and routing
 
-Audio delay defaults to 50 ms added, plus input/output device latency,
+Audio delay defaults to 500 ms added, plus input/output device latency,
 especially Bluetooth. To change the delay, restart the **audio service** with
 `--delay-ms 1000` (50–5000). Changes to audio device/capture/analysis code also
 require restarting that service; normal LED effect edits do not.
@@ -112,10 +125,10 @@ analysis/serial pipeline has less scheduling headroom: if late= rises or lightin
 misses beats, try 100–200 ms or reduce the LED receiver's --led-lead-ms. Copy the
 updated audio_led.py to other machines so their argument parser accepts 50 ms.
 
-The default added audio delay is now 50 ms. Run audio_playback.py without a
+The default added audio delay is now 500 ms. Run audio_playback.py without a
 delay argument to use it; an explicit --delay-ms value still overrides the default.
 
-At the 50 ms default, analysis slightly missing playback time is now forwarded
+At a 50 ms delay, analysis slightly missing playback time is now forwarded
 with a near-future LED timestamp rather than discarded. This may delay visuals
 slightly but does not change music delay. Analysis more than 250 ms overdue is
 still discarded to avoid replaying old beats. Audio logs show late= (retiming)

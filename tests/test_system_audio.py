@@ -13,7 +13,7 @@ from virtualdj_pixels import EnergyShowPixels
 
 class SystemAudioTests(unittest.TestCase):
     def test_delay_defaults_and_invalid_delays(self):
-        self.assertEqual(parse_args([]).delay_ms,50)
+        self.assertEqual(parse_args([]).delay_ms,500)
         self.assertEqual(parse_args(["--delay-ms","50"]).delay_ms,50)
         for value in ('nan','inf','-1','0','49','5001'):
             with contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
