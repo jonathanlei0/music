@@ -8,7 +8,7 @@ import time
 import serial
 from audio_led import find_arduino_port
 from virtualdj_melody import MelodyReading
-from virtualdj_pixels import EnergyShowPixels, PixelLink, BLACK, NUM_LEDS
+from virtualdj_pixels import RomanticPixels, PixelLink, BLACK, NUM_LEDS
 
 
 class AnalysisBuffer:
@@ -115,7 +115,7 @@ def run(args):
             for _ in range(512):
                 try:receiver.recv(16384)
                 except BlockingIOError:break
-            renderer=EnergyShowPixels(args.brightness)
+            renderer=RomanticPixels(args.brightness)
             reading=MelodyReading()
             next_frame=last_print=0
             frames=0;stats_at=time.monotonic()

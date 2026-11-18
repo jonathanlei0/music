@@ -170,3 +170,18 @@ settings, continued playback while LED reception reconnects, and reduced pitch
 work. A synthetic test on this Mac measured 73.6 ms of analysis per second of
 audio in normal mode versus 29.1 ms in stable mode; these are not measurements
 from the older machine and do not guarantee live audio stability there.
+
+## Romantic lighting
+
+Music-reactive LED commands now use RomanticPixels: plum/rose/amber note colors,
+slightly reduced intensity and saturation, 1.6x slower section-size/color timing,
+and gentler vocal/instrument fades. Tempo still changes responsiveness within
+this calmer range. Orange pulses use 140 ms rise, 100 ms hold and 600 ms fade;
+overlapping pulses remain skipped. Ordinary sparkle density is reduced with
+longer spawn gaps and half-size beat hops. Drop shows ease in and last longer.
+
+The reserved first four orange LEDs, brightness zero, audio timing, 30 FPS target,
+stable audio mode and exact --color/--gradient modes are unchanged. Restart only
+the LED process. On another computer, copy virtualdj_pixels.py and
+system_led_receiver.py (also virtualdj_led.py if using native VirtualDJ mode).
+All 108 Python tests pass.

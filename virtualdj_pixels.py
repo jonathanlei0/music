@@ -60,9 +60,10 @@ class MusicalMotion:
 
     def timing(self):
         speed = KickPixels.ease((self.bpm-85)/55)
-        return dict(color_hold=.70-.52*speed,color_fade=.50-.34*speed,
-                    size_interval=.40-.28*speed,shrink=1.30-1.0*speed,
-                    grow=1.80-1.40*speed)
+        timings = dict(color_hold=.70-.52*speed,color_fade=.50-.34*speed,
+                       size_interval=.40-.28*speed,shrink=1.30-1.0*speed,
+                       grow=1.80-1.40*speed)
+        return {name:value*getattr(self,"pace",1) for name,value in timings.items()}
 
     def set_note(self, note, now):
         import colorsys
@@ -208,7 +209,7 @@ class KickPixels:
             self.beat_moved_at = now
 
     def vocal_beat_position(self, now):
-        blend = self.ease((now-self.note_position_changed)/1.0)
+        blend = self.ease((now-self.note_position_changed)/getattr(self,"position_fade",1.0))
         return self.note_position_from+(self.note_position_target-self.note_position_from)*blend
 
     def set_vocal_position(self, note, now):
@@ -292,7 +293,7 @@ class VocalKickPixels(KickPixels):
         if self.last_update is None or now-self.last_update > .3:
             self.vocal_level = 0.0
             return BLACK
-        response = .100 if self.vocal_target > self.vocal_level else .450
+        response = getattr(self,"vocal_attack",.100) if self.vocal_target > self.vocal_level else getattr(self,"vocal_release",.450)
         self.vocal_level += (self.vocal_target-self.vocal_level)*(1-math.exp(-dt/response))
         pixels = bytearray(super().render(now))
         # Slow continuous drift; vocal amplitude changes width and brightness.
@@ -340,7 +341,7 @@ class StemPixels(VocalKickPixels):
         if self.last_update is None or now-self.last_update > .3:
             self.instrument_level = 0.0
             return BLACK
-        response = .140 if self.instrument_target > self.instrument_level else .550
+        response = getattr(self,"instrument_attack",.140) if self.instrument_target > self.instrument_level else getattr(self,"instrument_release",.550)
         self.instrument_level += (self.instrument_target-self.instrument_level)*(1-math.exp(-dt/response))
         gain = .55*self.instrument_level*self.brightness/100
         # Rounded washes at the ends and beside the center, with slow breathing.
@@ -382,7 +383,7 @@ class MelodyPixels(StemPixels):
                 key = particle[:2]
                 current = self.hop_offset(particle,now)
                 direction = 1 if (self.kick_count+index)%2 else -1
-                distance = 3+(index%3)
+                distance = (3+(index%3))*getattr(self,"sparkle_hop_scale",1)
                 self.beat_hops[key] = (current,current+direction*distance,now)
         dt = .02 if previous is None else min(.25,max(0,now-previous))
         level = self.instrument_target
@@ -411,9 +412,9 @@ class MelodyPixels(StemPixels):
         activity_gate = self.ease((self.instrument_variation-.04)/.35)*self.ease(self.instrument_target/.2)
         if activity_gate <= 0:
             return
-        density = activity_gate
+        density = activity_gate*getattr(self,"sparkle_density",1)
         changed = reading.note != self.melody_note
-        spawn_gap = (1.2-.85*density) if changed else (2.2-1.55*density)
+        spawn_gap = ((1.2-.85*density) if changed else (2.2-1.55*density))*getattr(self,"sparkle_spacing",1)
         if now-self.last_spawn < spawn_gap:
             return
         interval = 0 if self.melody_note is None else reading.note-self.melody_note
@@ -569,7 +570,7 @@ class ShowPixels(MelodyPixels):
         import math
         import colorsys
         pixels = bytearray(super().render(now))
-        age = now-self.drop_at
+        age = (now-self.drop_at)/getattr(self,"drop_time_scale",1)
         cap = round(255*self.brightness/100)
         dt = 1/30 if self.action_render_at is None else max(0,now-self.action_render_at)
         self.action_render_at = now
@@ -593,7 +594,7 @@ class ShowPixels(MelodyPixels):
         if (0 <= age < 3 and self.audible and self.last_update is not None
                 and now-self.last_update <= .3):
             # Broad violet/cyan sweep changes the whole scene, without strobes.
-            envelope = self.ease(age/.12)*(1-self.ease((age-1.5)/1.5))
+            envelope = self.ease(age/getattr(self,"drop_attack",.12))*(1-self.ease((age-1.5)/1.5))
             for i in range(NUM_LEDS):
                 radius = abs(i-(NUM_LEDS-1)/2)
                 wave = 0.0
@@ -738,4 +739,37 @@ class EnergyShowPixels(IdleShowPixels):
         # LEDs 1–4 are a reserved steady orange marker, even during idle fades.
         level = min(round(255*.05),round(255*self.brightness/100))
         pixels[:12] = bytes((level,round(level*40/255),0))*4
+        return bytes(pixels)
+
+
+class RomanticPixels(EnergyShowPixels):
+    """Warm, gentle music-reactive lighting; fixed-color modes remain exact."""
+    ATTACK_SECONDS = .140
+    HOLD_SECONDS = .100
+    RELEASE_SECONDS = .600
+
+    def __init__(self, brightness=50):
+        super().__init__(brightness)
+        self.music.pace = 1.6
+        self.position_fade = 1.6
+        self.vocal_attack, self.vocal_release = .22,.8
+        self.instrument_attack, self.instrument_release = .30,1.0
+        self.sparkle_density = .5
+        self.sparkle_spacing = 1.5
+        self.sparkle_hop_scale = .5
+        self.drop_time_scale = 1.5
+        self.drop_attack = .30
+
+    def render(self, now):
+        import colorsys
+        original = super().render(now)
+        pixels = bytearray(original)
+        # Keep the reserved 5% orange marker. Remap other section/note hues
+        # into plum, rose and amber, retaining their relative color variation.
+        for offset in range(12,len(pixels),3):
+            r,g,b = original[offset:offset+3]
+            hue,saturation,value = colorsys.rgb_to_hsv(r/255,g/255,b/255)
+            warm_hue = hue if hue < .17 else .82+.16*(hue-.17)/.83
+            color = colorsys.hsv_to_rgb(warm_hue,min(.68,saturation),value*.82)
+            pixels[offset:offset+3] = bytes(round(channel*255) for channel in color)
         return bytes(pixels)
