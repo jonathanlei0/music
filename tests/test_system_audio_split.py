@@ -40,19 +40,22 @@ class SplitTests(unittest.TestCase):
         # Exercise the real service loop/UDP publisher with a fake audio device.
         probe=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         probe.bind(('127.0.0.1',0));port=probe.getsockname()[1];probe.close()
-        args=parse_args(['--audio-only','--analysis-port',str(port)])
+        args=parse_args(['--audio-only','--stable','--analysis-port',str(port)])
         service=SystemLighting(args)
         callbacks=[]
         class FakeStream:
             latency=(0,.1)
             active=True
-            def __init__(self,**kwargs):self.callback=kwargs['callback'];self.done=threading.Event()
+            def __init__(self,**kwargs):
+                assert kwargs['latency']=='high'
+                assert kwargs['blocksize']==2048
+                self.callback=kwargs['callback'];self.done=threading.Event()
             def __enter__(self):
                 def pump():
                     timing=SimpleNamespace(outputBufferDacTime=1.1,currentTime=1)
                     while not self.done.is_set():
-                        audio=np.zeros((1024,2),dtype=np.float32)
-                        self.callback(audio,np.empty_like(audio),1024,timing,None)
+                        audio=np.zeros((2048,2),dtype=np.float32)
+                        self.callback(audio,np.empty_like(audio),2048,timing,None)
                         callbacks.append(1)
                         self.done.wait(.02)
                 self.worker=threading.Thread(target=pump);self.worker.start();return self

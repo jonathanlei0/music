@@ -84,6 +84,7 @@ def fixed_frame(args):
 
 def run(args):
     still = fixed_frame(args)
+    frame_interval = 1/30
     buffer=AnalysisBuffer(args.led_lead_ms/1000)
     ser=None;link=None
     with (socket.socket(socket.AF_INET,socket.SOCK_DGRAM) if still is None else nullcontext()) as receiver:
@@ -134,7 +135,7 @@ def run(args):
                     renderer.set_melody(reading,due)
                 if now>=next_frame:
                     link.send(renderer.render(now));frames+=1
-                    next_frame=max(next_frame+1/30,time.monotonic())
+                    next_frame=max(next_frame+frame_interval,time.monotonic())
                 else:time.sleep(.002)
                 if now-last_print>2:
                     fresh=renderer.last_update is not None and now-renderer.last_update<=.3

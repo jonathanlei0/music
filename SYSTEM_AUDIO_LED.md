@@ -134,3 +134,39 @@ slightly but does not change music delay. Analysis more than 250 ms overdue is
 still discarded to avoid replaying old beats. Audio logs show late= (retiming)
 and expired= (discarded frames). Copy updated system_audio_led.py and restart the
 audio service to enable this fix. All 100 Python tests pass.
+
+## Older-computer stability mode, still 30 FPS
+
+Use these two commands in separate terminals:
+
+```sh
+python3 audio_playback.py --stable
+python3 audio_led.py 2 --led-stats --led-lead-ms 40
+```
+
+Copy updated audio_led.py, system_audio_led.py, system_audio_stems.py and
+system_led_receiver.py to the older Mac before using this mode. Restart the
+playback service once to apply its buffer/analysis changes.
+
+--stable defaults to 2000 ms of added delay, asks the audio device for high-latency
+buffers and uses 2048-frame (42.7 ms) callbacks instead of 1024-frame callbacks.
+An explicit --delay-ms value overrides the preset, e.g. --stable --delay-ms 3000.
+The larger device buffers address capture overflow; added sample delay supplies
+lighting look-ahead but does not itself prevent audio callback underruns.
+
+Light analysis uses nine history frames (roughly the same time span as seventeen
+normal frames), checks pitch every three callbacks, and avoids the redundant
+full-mix pitch search. Stem analysis runs about 23 times/second and pitch checks
+about eight times/second. The unchanged renderer interpolates its envelopes at
+the same 30 FPS target. --stable does not lower LED FPS or remove visual effects.
+The deliberate tradeoff is slower note detection, not lower display cadence.
+
+Status reports cumulative input overflow and output underrun counts, separately
+from analysis late/expired/skipped counters. Occasional startup errors may stop
+increasing; continuing increases need further device/CPU investigation.
+
+All 105 Python tests pass, including exact two-second delay, high-buffer stream
+settings, continued playback while LED reception reconnects, and reduced pitch
+work. A synthetic test on this Mac measured 73.6 ms of analysis per second of
+audio in normal mode versus 29.1 ms in stable mode; these are not measurements
+from the older machine and do not guarantee live audio stability there.

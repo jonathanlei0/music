@@ -10,13 +10,19 @@ from virtualdj_melody import NoteTracker
 class SpectralStems:
     SIZE = 4096
 
-    def __init__(self):
+    def __init__(self, lightweight=False):
+        self.lightweight = lightweight
+        self.note_stride = 3 if lightweight else 2
         self.window = np.hanning(self.SIZE).astype(np.float32)
         self.audio = np.zeros((self.SIZE,2),dtype=np.float32)
         self.filled = 0
-        self.history = deque(maxlen=17)
+        # Stable mode uses 2048-sample callbacks: nine frames cover about the
+        # same time as seventeen normal 1024-sample frames, with fewer medians.
+        self.history = deque(maxlen=9 if lightweight else 17)
         self.frequencies = np.fft.rfftfreq(self.SIZE,1/SAMPLE_RATE)
-        self.tempo = MusicalAnalyzer()
+        # NoteTracker already analyzes estimated stems; avoid a second full-mix
+        # pitch search competing with the real-time audio callback.
+        self.tempo = MusicalAnalyzer(analyze_pitch=False)
         self.notes = NoteTracker()
         self.beatpos = 0.0
         self.last_time = None
@@ -24,7 +30,7 @@ class SpectralStems:
         self.counter = 0
 
     def reset(self):
-        self.__init__()
+        self.__init__(lightweight=self.lightweight)
 
     def rms_spectrum(self, spectrum):
         power = np.abs(spectrum)**2
@@ -84,7 +90,7 @@ class SpectralStems:
         deck = dict(id=1,valid=True,playing=int(level>=.001),volume=1.0,
                     level=level,bpm=bpm,beatpos=self.beatpos,**meters)
         note = None
-        if self.filled==self.SIZE and self.counter%2==0:
+        if self.filled==self.SIZE and self.counter%self.note_stride==0:
             chosen = vocal if meters['vocal']>.04 else other
             recovered = np.fft.irfft(chosen,n=self.SIZE,axis=0)
             channel = int(np.argmax(np.mean(recovered**2,axis=0)))

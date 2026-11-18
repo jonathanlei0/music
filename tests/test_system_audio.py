@@ -109,3 +109,64 @@ class SystemAudioTests(unittest.TestCase):
             lighting.analyze()
         self.assertEqual(lighting.expired,1)
         self.assertEqual(len(lighting.schedule),0)
+
+    def test_stable_profile_and_explicit_delay_override(self):
+        args=parse_args(['--stable'])
+        self.assertEqual(args.delay_ms,2000)
+        service=SystemLighting(args)
+        self.assertEqual(service.blocksize,2048)
+        self.assertEqual(service.audio_latency,'high')
+        self.assertEqual(parse_args(['--stable','--delay-ms','3000']).delay_ms,3000)
+        normal=SystemLighting(parse_args([]))
+        self.assertEqual(normal.blocksize,1024)
+        self.assertEqual(normal.audio_latency,'low')
+
+    def test_stable_callback_preserves_exact_two_second_delay_and_timestamps(self):
+        service=SystemLighting(parse_args(['--stable']))
+        count=SAMPLE_RATE*2
+        length=((count//2048)+3)*2048
+        audio=np.zeros((length,2),dtype=np.float32);audio[0]=1
+        timing=SimpleNamespace(outputBufferDacTime=20.2,currentTime=20)
+        result=[]
+        with patch('system_audio_led.time.monotonic',return_value=100):
+            for start in range(0,length,2048):
+                block=audio[start:start+2048];out=np.empty_like(block)
+                service.callback(block,out,len(block),timing,None);result.append(out)
+        self.assertEqual(np.flatnonzero(np.concatenate(result)[:,0]).tolist(),[count])
+        self.assertAlmostEqual(service.input.get_nowait()[1],102.2)
+
+    def test_audio_status_counters_are_independent_from_analysis_lateness(self):
+        service=SystemLighting(parse_args(['--stable']))
+        timing=SimpleNamespace(outputBufferDacTime=1.2,currentTime=1)
+        class Status:
+            input_overflow=True
+            output_underflow=False
+            def __str__(self):return 'input overflow'
+        block=np.zeros((2048,2),dtype=np.float32)
+        service.callback(block,np.empty_like(block),2048,timing,Status())
+        self.assertEqual(service.input_overflows,1)
+        self.assertEqual(service.output_underflows,0)
+        self.assertEqual(service.late,0)
+
+    def test_stem_analysis_avoids_duplicate_pitch_search(self):
+        analyzer=SpectralStems()
+        self.assertFalse(analyzer.tempo.analyze_pitch)
+        block=np.zeros((2048,2),dtype=np.float32)
+        with patch.object(analyzer.tempo,'_update_pitch',side_effect=AssertionError('duplicate pitch work')):
+            analyzer.process(block,0)
+        self.assertTrue(__import__('audio_led').MusicalAnalyzer().analyze_pitch)
+
+    def test_light_analysis_reduces_pitch_work_and_preserves_profile_on_reset(self):
+        normal=SpectralStems();light=SpectralStems(lightweight=True)
+        block=np.zeros((2048,2),dtype=np.float32)
+        with patch.object(normal.notes,'analyze',return_value=None) as normal_notes, \
+             patch.object(light.notes,'analyze',return_value=None) as light_notes:
+            for i in range(18):
+                now=i*2048/SAMPLE_RATE
+                normal.process(block,now);light.process(block,now)
+            self.assertLess(light_notes.call_count,normal_notes.call_count)
+        self.assertEqual(light.history.maxlen,9)
+        light.reset()
+        self.assertTrue(light.lightweight)
+        self.assertEqual(light.note_stride,3)
+        self.assertEqual(light.history.maxlen,9)

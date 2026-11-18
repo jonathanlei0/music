@@ -143,8 +143,10 @@ def parse_args(argv=None):
     parser.add_argument("--output-device", default=AUDIO_OUTPUT_DEVICE_NAME,
                         help="playback device name or substring (default: %(default)s)")
     parser.add_argument('--serial-port', help='Arduino port (otherwise auto-detect)')
-    parser.add_argument('--delay-ms', type=float, default=AUDIO_DELAY_MS,
+    parser.add_argument('--delay-ms', type=float, default=None,
                         help=f'added audio delay in ms, 50–5000 (default: {AUDIO_DELAY_MS:g})')
+    parser.add_argument('--stable', action='store_true',
+                        help='older computers: 2-second default delay, larger audio buffers, lighter analysis')
     parser.add_argument('--debug-startup', action='store_true',
                         help='dump a traceback if startup stalls for 15 seconds')
     parser.add_argument('--audio-only', action='store_true',
@@ -157,6 +159,8 @@ def parse_args(argv=None):
     fixed.add_argument('--gradient', type=led_color, nargs=2, metavar=('START', 'END'),
                        help='hold a gradient from the first color to the second')
     args = parser.parse_args(argv)
+    if args.delay_ms is None:
+        args.delay_ms = 2000.0 if args.stable else AUDIO_DELAY_MS
     if args.audio_only and (args.color is not None or args.gradient is not None):
         parser.error('--color and --gradient are only available in LED mode')
     if not 1024 <= args.analysis_port <= 65535:
@@ -354,7 +358,8 @@ def massive_drop(beat, db, bass, onset, threshold, db_history, bass_history, sin
 class MusicalAnalyzer:
     """Extracts mood and structural events from a continuous full mix."""
 
-    def __init__(self):
+    def __init__(self, analyze_pitch=True):
+        self.analyze_pitch = analyze_pitch
         self.previous_db = -90.0
         self.previous_bass = 0.0
         self.previous_mid = 0.0
@@ -537,7 +542,8 @@ class MusicalAnalyzer:
         self.onset_history.append(onset)
         self.bass_history.append(bass)
         self.centroid_history.append(centroid)
-        self._update_pitch(audio, level)
+        if self.analyze_pitch:
+            self._update_pitch(audio, level)
         self._update_mood(centroid)
 
         self.previous_db = db

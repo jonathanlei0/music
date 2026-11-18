@@ -22,10 +22,17 @@ class SystemLighting:
         self.error = None
         self.status = ''
         self.dropped = self.late = self.expired = 0
+        self.input_overflows = self.output_underflows = 0
+        self.blocksize = 2048 if args.stable else BLOCK_SIZE
+        self.audio_latency = 'high' if args.stable else 'low'
 
     def callback(self, indata, outdata, frames, timing, status):
         if status:
             self.status = str(status)
+            if getattr(status, 'input_overflow', False):
+                self.input_overflows += 1
+            if getattr(status, 'output_underflow', False):
+                self.output_underflows += 1
         self.delay.process(indata,outdata)
         now = time.monotonic()
         latency = float(timing.outputBufferDacTime-timing.currentTime)
@@ -43,7 +50,7 @@ class SystemLighting:
             except queue.Full:pass
 
     def analyze(self):
-        analyzer = SpectralStems()
+        analyzer = SpectralStems(lightweight=self.args.stable)
         try:
             while not self.stop.is_set():
                 try:captured,due,audio = self.input.get(timeout=.1)
@@ -81,12 +88,14 @@ class SystemLighting:
         try:
             with audio_service_lock(), socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as publisher:
                 with sd.Stream(device=(input_device,output_device),channels=(2,2),
-                               samplerate=SAMPLE_RATE,blocksize=BLOCK_SIZE,dtype='float32',
-                               latency='low',callback=self.callback) as stream:
+                               samplerate=SAMPLE_RATE,blocksize=self.blocksize,dtype='float32',
+                               latency=self.audio_latency,callback=self.callback) as stream:
                     print(f"Audio service: {sd.query_devices(input_device)['name']} -> "
                           f"{sd.query_devices(output_device)['name']}",flush=True)
                     print(f'Added delay {args.delay_ms:g} ms; output latency '
                           f'{stream.latency[1]*1000:.1f} ms. No Arduino connection.',flush=True)
+                    print(f'Audio buffers: {self.audio_latency} latency, {self.blocksize} frames '
+                          f'({self.blocksize/SAMPLE_RATE*1000:.1f} ms per callback).',flush=True)
                     print('Music continues while the LED sender is stopped/restarted. Ctrl+C stops music.',flush=True)
                     last_print = 0
                     while not self.stop.is_set() and stream.active:
@@ -107,7 +116,9 @@ class SystemLighting:
                                 pass # LED delivery must never interrupt music.
                         now = time.monotonic()
                         if now-last_print>3:
-                            print(f'Audio running | analysis late={self.late} expired={self.expired} skipped={self.dropped}',flush=True)
+                            print(f'Audio running | input overflows={self.input_overflows} '
+                                  f'output underruns={self.output_underflows} | '
+                                  f'analysis late={self.late} expired={self.expired} skipped={self.dropped}',flush=True)
                             if self.status:print(f'Audio: {self.status}',flush=True);self.status=''
                             last_print=now
                         self.stop.wait(.005)
