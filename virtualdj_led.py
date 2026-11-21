@@ -18,7 +18,7 @@ if __name__ == '__main__' and importlib.util.find_spec('serial') is None:
 
 import serial
 from audio_led import brightness_percent, find_arduino_port, midi_name
-from virtualdj_pixels import RomanticPixels, PixelLink, BLACK
+from virtualdj_pixels import GameDayPixels, PixelLink, BLACK
 from section_palette import SectionPalette
 
 STEMS = ('vocal', 'instru', 'bass', 'kick', 'hihat')
@@ -136,7 +136,7 @@ def parse_args(argv=None):
 
 def run(args):
     lights = StemLights()
-    renderer = RomanticPixels(args.brightness)
+    renderer = GameDayPixels(args.brightness)
     melody = None
     link = None
     next_frame = 0.0

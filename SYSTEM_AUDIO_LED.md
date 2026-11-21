@@ -171,17 +171,19 @@ work. A synthetic test on this Mac measured 73.6 ms of analysis per second of
 audio in normal mode versus 29.1 ms in stable mode; these are not measurements
 from the older machine and do not guarantee live audio stability there.
 
-## Romantic lighting
+## Harvard game-day lighting
 
-Music-reactive LED commands now use RomanticPixels: plum/rose/amber note colors,
-slightly reduced intensity and saturation, 1.6x slower section-size/color timing,
-and gentler vocal/instrument fades. Tempo still changes responsiveness within
-this calmer range. Orange pulses use 140 ms rise, 100 ms hold and 600 ms fade;
-overlapping pulses remain skipped. Ordinary sparkle density is reduced with
-longer spawn gaps and half-size beat hops. Drop shows ease in and last longer.
+The latest romantic-lighting change has been undone in the working tree. The
+music renderer now uses GameDayPixels with the earlier timing and a restricted
+red/orange/purple palette, including idle gradients and drop shows. Ordinary
+note colors map into those three families. Fixed --color/--gradient modes still
+use exactly the colors you request.
 
-The reserved first four orange LEDs, brightness zero, audio timing, 30 FPS target,
-stable audio mode and exact --color/--gradient modes are unchanged. Restart only
-the LED process. On another computer, copy virtualdj_pixels.py and
-system_led_receiver.py (also virtualdj_led.py if using native VirtualDJ mode).
-All 108 Python tests pass.
+Every 6–8 seconds, four white sparkles appear briefly, hopping four LEDs at a
+time along the line in alternating directions. They pause between hops and fade
+out after 2.8 seconds. The first four orange marker LEDs and brightness cap are
+preserved. Audio playback, stable mode and 30 FPS target are unchanged.
+
+Copy virtualdj_pixels.py and system_led_receiver.py to the other Mac, then restart
+only audio_led.py. Copy virtualdj_led.py too if using native VirtualDJ mode.
+All 108 Python tests pass; no Arduino upload is needed.
